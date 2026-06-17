@@ -66,6 +66,7 @@ export default function DashboardPage() {
       .from("vehicles")
       .select("*")
       .eq("user_id", data.user.id)
+      .eq("is_won", false)
       .order("created_at", { ascending: false });
 
     setVehicles(vehicleData || []);
