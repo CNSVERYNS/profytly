@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 type Vehicle = {
   id: string;
@@ -11,6 +12,11 @@ type Vehicle = {
   lot_number: string | null;
   title: string | null;
   notes: string | null;
+  vehicle_year: string | null;
+  vehicle_make: string | null;
+  vehicle_model: string | null;
+  location: string | null;
+  title_status: string | null;
   created_at: string;
 };
 
@@ -58,6 +64,74 @@ export default function DashboardPage() {
     return match ? match[1] : null;
   }
 
+  function titleCase(text: string) {
+    return text
+      .split(" ")
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  }
+
+  function parseAuctionUrl(url: string) {
+    const cleanUrl = url.split("?")[0];
+    const parts = cleanUrl.split("/").filter(Boolean);
+    const slug = parts[parts.length - 1] || "";
+
+    const slugParts = slug.split("-").filter(Boolean);
+
+    let titleStatus: string | null = null;
+    let vehicleYear: string | null = null;
+    let vehicleMake: string | null = null;
+    let vehicleModel: string | null = null;
+    let location: string | null = null;
+
+    const yearIndex = slugParts.findIndex((part) => /^20\d{2}|19\d{2}$/.test(part));
+
+    if (yearIndex > -1) {
+      vehicleYear = slugParts[yearIndex];
+
+      const beforeYear = slugParts.slice(0, yearIndex);
+      const afterYear = slugParts.slice(yearIndex + 1);
+
+      if (beforeYear.length > 0) {
+        titleStatus = titleCase(beforeYear.join(" "));
+      }
+
+      if (afterYear.length >= 2) {
+        vehicleMake = titleCase(afterYear[0]);
+
+        const locationStartIndex = Math.max(afterYear.length - 2, 2);
+        const modelParts = afterYear.slice(1, locationStartIndex);
+        const locationParts = afterYear.slice(locationStartIndex);
+
+        vehicleModel = titleCase(modelParts.join(" "));
+        location = titleCase(locationParts.join(" "));
+      }
+    }
+
+    return {
+      titleStatus,
+      vehicleYear,
+      vehicleMake,
+      vehicleModel,
+      location,
+    };
+  }
+
+  function buildVehicleTitle(
+    source: string,
+    lotNumber: string | null,
+    vehicleYear: string | null,
+    vehicleMake: string | null,
+    vehicleModel: string | null
+  ) {
+    if (vehicleYear && vehicleMake && vehicleModel) {
+      return `${vehicleYear} ${vehicleMake} ${vehicleModel}`;
+    }
+
+    return lotNumber ? `${source.toUpperCase()} Lot ${lotNumber}` : "Saved Vehicle";
+  }
+
   async function saveVehicle() {
     setMessage("");
 
@@ -68,13 +142,27 @@ export default function DashboardPage() {
 
     const source = detectSource(auctionUrl);
     const lotNumber = extractLotNumber(auctionUrl);
+    const parsed = parseAuctionUrl(auctionUrl);
+
+    const title = buildVehicleTitle(
+      source,
+      lotNumber,
+      parsed.vehicleYear,
+      parsed.vehicleMake,
+      parsed.vehicleModel
+    );
 
     const { error } = await supabase.from("vehicles").insert({
       user_id: userId,
       auction_url: auctionUrl.trim(),
       source,
       lot_number: lotNumber,
-      title: lotNumber ? `${source.toUpperCase()} Lot ${lotNumber}` : "Saved Vehicle",
+      title,
+      vehicle_year: parsed.vehicleYear,
+      vehicle_make: parsed.vehicleMake,
+      vehicle_model: parsed.vehicleModel,
+      location: parsed.location,
+      title_status: parsed.titleStatus,
     });
 
     if (error) {
@@ -122,7 +210,7 @@ export default function DashboardPage() {
             <input
               value={auctionUrl}
               onChange={(e) => setAuctionUrl(e.target.value)}
-              placeholder="https://www.copart.com/lot/..."
+              placeholder="https://www.copart.com/lot/85739455/clean-title-2016-kia-sorento-lx-md-baltimore-east"
               className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3"
             />
 
@@ -145,27 +233,30 @@ export default function DashboardPage() {
               <p className="text-zinc-500">No vehicles saved yet.</p>
             ) : (
               vehicles.map((vehicle) => (
-                <div
+                <Link
                   key={vehicle.id}
-                  className="rounded-xl border border-zinc-800 bg-zinc-950 p-4"
+                  href={`/dashboard/vehicle/${vehicle.id}`}
+                  className="block rounded-xl border border-zinc-800 bg-zinc-950 p-4 transition hover:border-green-500"
                 >
-                  <div className="font-semibold">
-                    {vehicle.title || "Saved Vehicle"}
-                  </div>
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="font-semibold">
+                        {vehicle.title || "Saved Vehicle"}
+                      </div>
 
-                  <div className="mt-1 text-sm text-zinc-500">
-                    Source: {vehicle.source || "unknown"}{" "}
-                    {vehicle.lot_number ? `• Lot: ${vehicle.lot_number}` : ""}
-                  </div>
+                      <div className="mt-1 text-sm text-zinc-500">
+                        {vehicle.title_status && `${vehicle.title_status} • `}
+                        {vehicle.location && `${vehicle.location} • `}
+                        {vehicle.source || "unknown"}{" "}
+                        {vehicle.lot_number ? `• Lot: ${vehicle.lot_number}` : ""}
+                      </div>
+                    </div>
 
-                  <a
-                    href={vehicle.auction_url}
-                    target="_blank"
-                    className="mt-3 block text-sm text-green-500"
-                  >
-                    Open auction link
-                  </a>
-                </div>
+                    <div className="text-sm text-green-500">
+                      Open details →
+                    </div>
+                  </div>
+                </Link>
               ))
             )}
           </div>
