@@ -8,6 +8,7 @@ import Link from "next/link";
 type Vehicle = {
   id: string;
   auction_url: string;
+  image_url: string | null;
   source: string | null;
   lot_number: string | null;
   title: string | null;
@@ -59,6 +60,7 @@ export default function VehicleDetailPage() {
   const [stateCodeInput, setStateCodeInput] = useState("");
   const [sourceInput, setSourceInput] = useState("");
   const [lotNumberInput, setLotNumberInput] = useState("");
+  const [imageUrlInput, setImageUrlInput] = useState("");
 
   const [retailPriceInput, setRetailPriceInput] = useState("");
   const [desiredProfitInput, setDesiredProfitInput] = useState("");
@@ -95,6 +97,7 @@ export default function VehicleDetailPage() {
       setStateCodeInput(vehicleData.state_code ?? "");
       setSourceInput(vehicleData.source ?? "");
       setLotNumberInput(vehicleData.lot_number ?? "");
+      setImageUrlInput(vehicleData.image_url ?? "");
 
       setRetailPriceInput(String(vehicleData.retail_price ?? vehicleData.market_value ?? 0));
       setDesiredProfitInput(String(vehicleData.desired_profit ?? vehicleData.target_profit ?? 0));
@@ -144,6 +147,7 @@ export default function VehicleDetailPage() {
         state_code: nullIfEmpty(stateCodeInput)?.toUpperCase() || null,
         source: nullIfEmpty(sourceInput),
         lot_number: nullIfEmpty(lotNumberInput),
+        image_url: nullIfEmpty(imageUrlInput),
       })
       .eq("id", vehicleId);
 
@@ -247,44 +251,62 @@ export default function VehicleDetailPage() {
       </nav>
 
       <section className="mx-auto max-w-6xl px-6 py-10">
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-          <div className="text-sm uppercase text-zinc-500">
-            {vehicle.source || "Auction"} Vehicle
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+            <div className="text-sm uppercase text-zinc-500">
+              {vehicle.source || "Auction"} Vehicle
+            </div>
+
+            <h1 className="mt-3 text-4xl font-bold">
+              {vehicle.title || "Saved Vehicle"}
+            </h1>
+
+            <div className="mt-4 text-zinc-400">
+              {vehicle.title_status && <p>{vehicle.title_status}</p>}
+
+              {vehicle.location && (
+                <p>
+                  {vehicle.location}
+                  {vehicle.state_code ? `, ${vehicle.state_code}` : ""}
+                </p>
+              )}
+
+              {vehicle.lot_number && <p>Lot #{vehicle.lot_number}</p>}
+              <p>Source: {vehicle.source || "unknown"}</p>
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <a
+                href={vehicle.auction_url}
+                target="_blank"
+                className="inline-block rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
+              >
+                Open Auction Link
+              </a>
+
+              <button
+                onClick={deleteVehicle}
+                className="rounded-lg border border-red-800 px-5 py-3 text-red-400"
+              >
+                Delete Vehicle
+              </button>
+            </div>
           </div>
 
-          <h1 className="mt-3 text-4xl font-bold">
-            {vehicle.title || "Saved Vehicle"}
-          </h1>
-
-          <div className="mt-4 text-zinc-400">
-            {vehicle.title_status && <p>{vehicle.title_status}</p>}
-
-            {vehicle.location && (
-              <p>
-                {vehicle.location}
-                {vehicle.state_code ? `, ${vehicle.state_code}` : ""}
-              </p>
+          <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+            {vehicle.image_url ? (
+              <img
+                src={vehicle.image_url}
+                alt={vehicle.title || "Vehicle image"}
+                className="h-full min-h-72 w-full object-cover"
+              />
+            ) : (
+              <div className="flex min-h-72 items-center justify-center p-6 text-center text-zinc-500">
+                No vehicle image yet.
+                <br />
+                Add an image URL below.
+              </div>
             )}
-
-            {vehicle.lot_number && <p>Lot #{vehicle.lot_number}</p>}
-            <p>Source: {vehicle.source || "unknown"}</p>
-          </div>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <a
-              href={vehicle.auction_url}
-              target="_blank"
-              className="inline-block rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
-            >
-              Open Auction Link
-            </a>
-
-            <button
-              onClick={deleteVehicle}
-              className="rounded-lg border border-red-800 px-5 py-3 text-red-400"
-            >
-              Delete Vehicle
-            </button>
           </div>
         </div>
 
@@ -367,6 +389,15 @@ export default function VehicleDetailPage() {
               value={lotNumberInput}
               onChange={setLotNumberInput}
               placeholder="85739455"
+            />
+          </div>
+
+          <div className="mt-4">
+            <TextField
+              label="Vehicle Image URL"
+              value={imageUrlInput}
+              onChange={setImageUrlInput}
+              placeholder="https://example.com/vehicle-image.jpg"
             />
           </div>
 
