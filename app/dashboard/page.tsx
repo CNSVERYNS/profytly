@@ -18,6 +18,17 @@ type Vehicle = {
   location: string | null;
   state_code: string | null;
   title_status: string | null;
+
+  profyt_score: number | null;
+  retail_price: number | null;
+  market_value: number | null;
+  desired_profit: number | null;
+  target_profit: number | null;
+  recommended_bid: number | null;
+  estimated_fees: number | null;
+  estimated_transport: number | null;
+  estimated_repairs: number | null;
+
   created_at: string;
 };
 
@@ -161,6 +172,29 @@ export default function DashboardPage() {
     return lotNumber ? `${source.toUpperCase()} Lot ${lotNumber}` : "Saved Vehicle";
   }
 
+  function money(value: number | null | undefined) {
+    if (value === null || value === undefined) return "-";
+    return `$${Number(value).toLocaleString()}`;
+  }
+
+  function getRetailPrice(vehicle: Vehicle) {
+    return vehicle.retail_price ?? vehicle.market_value ?? 0;
+  }
+
+  function getDesiredProfit(vehicle: Vehicle) {
+    return vehicle.desired_profit ?? vehicle.target_profit ?? 0;
+  }
+
+  function calculateMaxBid(vehicle: Vehicle) {
+    const retailPrice = getRetailPrice(vehicle);
+    const desiredProfit = getDesiredProfit(vehicle);
+    const repairs = vehicle.estimated_repairs ?? 0;
+    const transport = vehicle.estimated_transport ?? 0;
+    const fees = vehicle.estimated_fees ?? 0;
+
+    return retailPrice - desiredProfit - repairs - transport - fees;
+  }
+
   async function saveVehicle() {
     setMessage("");
 
@@ -181,6 +215,19 @@ export default function DashboardPage() {
       parsed.vehicleModel
     );
 
+    const retailPrice = 8900;
+    const desiredProfit = 1500;
+    const estimatedFees = 875;
+    const estimatedTransport = 300;
+    const estimatedRepairs = 900;
+
+    const recommendedBid =
+      retailPrice -
+      desiredProfit -
+      estimatedRepairs -
+      estimatedTransport -
+      estimatedFees;
+
     const { error } = await supabase.from("vehicles").insert({
       user_id: userId,
       auction_url: auctionUrl.trim(),
@@ -193,15 +240,16 @@ export default function DashboardPage() {
       location: parsed.location,
       state_code: parsed.stateCode,
       title_status: parsed.titleStatus,
-        profyt_score: 88,
-        retail_price: 8900,
-        market_value: 8900,
-        desired_profit: 1500,
-        recommended_bid: 5325,
-        estimated_fees: 875,
-        estimated_transport: 300,
-        estimated_repairs: 900,
-        target_profit: 1500,
+
+      profyt_score: 88,
+      retail_price: retailPrice,
+      market_value: retailPrice,
+      desired_profit: desiredProfit,
+      target_profit: desiredProfit,
+      recommended_bid: recommendedBid,
+      estimated_fees: estimatedFees,
+      estimated_transport: estimatedTransport,
+      estimated_repairs: estimatedRepairs,
     });
 
     if (error) {
@@ -265,41 +313,113 @@ export default function DashboardPage() {
         </div>
 
         <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-          <h2 className="text-xl font-bold">My Watchlist</h2>
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-xl font-bold">My Watchlist</h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Track vehicles, compare profit potential, and open full analysis.
+              </p>
+            </div>
+
+            <div className="text-sm text-zinc-500">
+              {vehicles.length} saved vehicle{vehicles.length === 1 ? "" : "s"}
+            </div>
+          </div>
 
           <div className="mt-6 space-y-4">
             {vehicles.length === 0 ? (
               <p className="text-zinc-500">No vehicles saved yet.</p>
             ) : (
-              vehicles.map((vehicle) => (
-                <Link
-                  key={vehicle.id}
-                  href={`/dashboard/vehicle/${vehicle.id}`}
-                  className="block rounded-xl border border-zinc-800 bg-zinc-950 p-4 transition hover:border-green-500"
-                >
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <div className="font-semibold">
-                        {vehicle.title || "Saved Vehicle"}
+              vehicles.map((vehicle) => {
+                const maxBid = calculateMaxBid(vehicle);
+                const retailPrice = getRetailPrice(vehicle);
+                const desiredProfit = getDesiredProfit(vehicle);
+
+                return (
+                  <Link
+                    key={vehicle.id}
+                    href={`/dashboard/vehicle/${vehicle.id}`}
+                    className="block rounded-xl border border-zinc-800 bg-zinc-950 p-5 transition hover:border-green-500"
+                  >
+                    <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <h3 className="text-lg font-bold">
+                            {vehicle.title || "Saved Vehicle"}
+                          </h3>
+
+                          {vehicle.title_status && (
+                            <span className="rounded-full bg-green-500/10 px-3 py-1 text-xs font-semibold text-green-400">
+                              {vehicle.title_status}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mt-2 text-sm text-zinc-500">
+                          {vehicle.location &&
+                            `${vehicle.location}${vehicle.state_code ? `, ${vehicle.state_code}` : ""} • `}
+                          {vehicle.source || "unknown"}{" "}
+                          {vehicle.lot_number ? `• Lot: ${vehicle.lot_number}` : ""}
+                        </div>
                       </div>
 
-                      <div className="mt-1 text-sm text-zinc-500">
-                        {vehicle.title_status && `${vehicle.title_status} • `}
-                        {vehicle.location &&
-                          `${vehicle.location}${vehicle.state_code ? `, ${vehicle.state_code}` : ""} • `}
-                        {vehicle.source || "unknown"}{" "}
-                        {vehicle.lot_number ? `• Lot: ${vehicle.lot_number}` : ""}
+                      <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[560px]">
+                        <MiniMetric
+                          label="Retail"
+                          value={money(retailPrice)}
+                        />
+
+                        <MiniMetric
+                          label="Max Bid"
+                          value={money(maxBid)}
+                          highlight
+                        />
+
+                        <MiniMetric
+                          label="Profit"
+                          value={money(desiredProfit)}
+                        />
+
+                        <MiniMetric
+                          label="Score"
+                          value={`${vehicle.profyt_score ?? "-"} / 100`}
+                        />
                       </div>
                     </div>
 
-                    <div className="text-sm text-green-500">Open details →</div>
-                  </div>
-                </Link>
-              ))
+                    <div className="mt-4 text-sm text-green-500">
+                      Open full analysis →
+                    </div>
+                  </Link>
+                );
+              })
             )}
           </div>
         </div>
       </section>
     </main>
+  );
+}
+
+function MiniMetric({
+  label,
+  value,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3">
+      <div className="text-xs text-zinc-500">{label}</div>
+      <div
+        className={`mt-1 font-bold ${
+          highlight ? "text-green-500" : "text-white"
+        }`}
+      >
+        {value}
+      </div>
+    </div>
   );
 }
