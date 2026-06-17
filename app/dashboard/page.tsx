@@ -16,6 +16,7 @@ type Vehicle = {
   vehicle_make: string | null;
   vehicle_model: string | null;
   location: string | null;
+  state_code: string | null;
   title_status: string | null;
   created_at: string;
 };
@@ -68,15 +69,30 @@ export default function DashboardPage() {
     return text
       .split(" ")
       .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .map((word) => {
+        const upperWords = ["LX", "EX", "SE", "LE", "XLE", "AWD", "FWD", "RWD"];
+        const upper = word.toUpperCase();
+
+        if (upperWords.includes(upper)) return upper;
+
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      })
       .join(" ");
   }
 
   function parseAuctionUrl(url: string) {
+    const STATES = [
+      "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+      "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+      "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+      "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+      "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+      "DC",
+    ];
+
     const cleanUrl = url.split("?")[0];
     const parts = cleanUrl.split("/").filter(Boolean);
     const slug = parts[parts.length - 1] || "";
-
     const slugParts = slug.split("-").filter(Boolean);
 
     let titleStatus: string | null = null;
@@ -84,8 +100,11 @@ export default function DashboardPage() {
     let vehicleMake: string | null = null;
     let vehicleModel: string | null = null;
     let location: string | null = null;
+    let stateCode: string | null = null;
 
-    const yearIndex = slugParts.findIndex((part) => /^20\d{2}|19\d{2}$/.test(part));
+    const yearIndex = slugParts.findIndex((part) =>
+      /^(19|20)\d{2}$/.test(part)
+    );
 
     if (yearIndex > -1) {
       vehicleYear = slugParts[yearIndex];
@@ -97,15 +116,24 @@ export default function DashboardPage() {
         titleStatus = titleCase(beforeYear.join(" "));
       }
 
-      if (afterYear.length >= 2) {
+      if (afterYear.length > 0) {
         vehicleMake = titleCase(afterYear[0]);
+      }
 
-        const locationStartIndex = Math.max(afterYear.length - 2, 2);
-        const modelParts = afterYear.slice(1, locationStartIndex);
-        const locationParts = afterYear.slice(locationStartIndex);
+      const stateIndex = afterYear.findIndex((part) =>
+        STATES.includes(part.toUpperCase())
+      );
+
+      if (stateIndex > -1) {
+        stateCode = afterYear[stateIndex].toUpperCase();
+
+        const modelParts = afterYear.slice(1, stateIndex);
+        const locationParts = afterYear.slice(stateIndex + 1);
 
         vehicleModel = titleCase(modelParts.join(" "));
         location = titleCase(locationParts.join(" "));
+      } else {
+        vehicleModel = titleCase(afterYear.slice(1).join(" "));
       }
     }
 
@@ -115,6 +143,7 @@ export default function DashboardPage() {
       vehicleMake,
       vehicleModel,
       location,
+      stateCode,
     };
   }
 
@@ -162,7 +191,17 @@ export default function DashboardPage() {
       vehicle_make: parsed.vehicleMake,
       vehicle_model: parsed.vehicleModel,
       location: parsed.location,
+      state_code: parsed.stateCode,
       title_status: parsed.titleStatus,
+        profyt_score: 88,
+        retail_price: 8900,
+        market_value: 8900,
+        desired_profit: 1500,
+        recommended_bid: 5325,
+        estimated_fees: 875,
+        estimated_transport: 300,
+        estimated_repairs: 900,
+        target_profit: 1500,
     });
 
     if (error) {
@@ -246,15 +285,14 @@ export default function DashboardPage() {
 
                       <div className="mt-1 text-sm text-zinc-500">
                         {vehicle.title_status && `${vehicle.title_status} • `}
-                        {vehicle.location && `${vehicle.location} • `}
+                        {vehicle.location &&
+                          `${vehicle.location}${vehicle.state_code ? `, ${vehicle.state_code}` : ""} • `}
                         {vehicle.source || "unknown"}{" "}
                         {vehicle.lot_number ? `• Lot: ${vehicle.lot_number}` : ""}
                       </div>
                     </div>
 
-                    <div className="text-sm text-green-500">
-                      Open details →
-                    </div>
+                    <div className="text-sm text-green-500">Open details →</div>
                   </div>
                 </Link>
               ))
