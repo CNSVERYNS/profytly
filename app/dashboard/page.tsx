@@ -1,5 +1,6 @@
 "use client";
 
+import AppNav from "@/components/AppNav";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
@@ -900,25 +901,10 @@ export default function DashboardPage() {
     printWindow.document.close();
   }
 
-  async function logout() {
-    await supabase.auth.signOut();
-    router.push("/");
-  }
 
   return (
     <main className="min-h-screen bg-zinc-950 text-white">
-      <nav className="flex items-center justify-between border-b border-zinc-800 px-6 py-5">
-        <div className="text-2xl font-bold">
-          Profyt<span className="text-green-500">ly</span>
-        </div>
-
-        <button
-          onClick={logout}
-          className="rounded-lg border border-zinc-700 px-4 py-2 text-sm"
-        >
-          Logout
-        </button>
-      </nav>
+      <AppNav />
 
       <section className="mx-auto max-w-7xl px-6 py-10">
         <p className="text-sm text-zinc-400">Logged in as {email}</p>

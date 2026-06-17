@@ -1,5 +1,6 @@
 "use client";
 
+import AppNav from "@/components/AppNav";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
@@ -479,31 +480,7 @@ export default function InventoryPage() {
 
   return (
     <main className="min-h-screen bg-zinc-950 text-white">
-      <nav className="flex flex-col gap-4 border-b border-zinc-800 px-6 py-5 md:flex-row md:items-center md:justify-between">
-        <Link href="/dashboard" className="text-2xl font-bold">
-          Profyt<span className="text-green-500">ly</span>
-        </Link>
-
-        <div className="flex flex-wrap gap-3">
-          <Link
-            href="/dashboard"
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm"
-          >
-            Watchlist
-          </Link>
-
-          <div className="rounded-lg bg-green-500 px-4 py-2 text-sm font-semibold text-black">
-            Inventory
-          </div>
-
-          <Link
-            href="/sold"
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm"
-          >
-            Sold Vehicles
-          </Link>
-        </div>
-      </nav>
+      <AppNav />
 
       <section className="mx-auto max-w-7xl px-6 py-10">
         <p className="text-sm font-semibold uppercase tracking-wider text-green-500">
