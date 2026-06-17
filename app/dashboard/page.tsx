@@ -8,6 +8,7 @@ import Link from "next/link";
 type Vehicle = {
   id: string;
   auction_url: string;
+  image_url: string | null;
   source: string | null;
   lot_number: string | null;
   title: string | null;
@@ -102,8 +103,7 @@ export default function DashboardPage() {
       "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
       "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
       "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-      "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-      "DC",
+      "SD", "TN", "TX", "UT", "VT", "VA", "WV", "WI", "WY", "DC",
     ];
 
     const cleanUrl = url.split("?")[0];
@@ -288,6 +288,7 @@ export default function DashboardPage() {
     const { error } = await supabase.from("vehicles").insert({
       user_id: userId,
       auction_url: auctionUrl.trim(),
+      image_url: null,
       source,
       lot_number: lotNumber,
       title,
@@ -386,6 +387,7 @@ export default function DashboardPage() {
       "Transport",
       "Auction Fees",
       "Profyt Score",
+      "Image URL",
       "Auction URL",
       "Created At",
     ];
@@ -404,6 +406,7 @@ export default function DashboardPage() {
       vehicle.estimated_transport ?? 0,
       vehicle.estimated_fees ?? 0,
       vehicle.profyt_score ?? "",
+      vehicle.image_url ?? "",
       vehicle.auction_url,
       vehicle.created_at,
     ]);
@@ -519,8 +522,8 @@ export default function DashboardPage() {
             }
 
             .vehicle-header {
-              display: flex;
-              justify-content: space-between;
+              display: grid;
+              grid-template-columns: 1.3fr 0.7fr;
               gap: 24px;
               border-bottom: 1px solid #e5e7eb;
               padding-bottom: 16px;
@@ -551,51 +554,51 @@ export default function DashboardPage() {
               line-height: 1.7;
             }
 
-            .score {
-              min-width: 140px;
+            .vehicle-image-box {
+              overflow: hidden;
               border: 1px solid #d1d5db;
               border-radius: 14px;
-              padding: 16px;
+              min-height: 180px;
+              background: #f3f4f6;
+            }
+
+            .vehicle-image {
+              width: 100%;
+              height: 220px;
+              object-fit: cover;
+              display: block;
+            }
+
+            .vehicle-image-placeholder {
+              height: 220px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
               text-align: center;
-            }
-
-            .score-label {
               color: #6b7280;
-              font-size: 12px;
+              font-size: 13px;
+              padding: 16px;
             }
 
-            .score-value {
-              margin-top: 8px;
-              font-size: 34px;
-              font-weight: 900;
-            }
-
-            .score-mode {
-              margin-top: 6px;
-              color: #16a34a;
-              font-size: 12px;
-              font-weight: 700;
-            }
-
-            .grid {
+            .score-row {
               display: grid;
               grid-template-columns: repeat(4, 1fr);
               gap: 12px;
               margin-top: 18px;
             }
 
-            .card {
+            .score-card {
               border: 1px solid #d1d5db;
               border-radius: 12px;
               padding: 14px;
             }
 
-            .card .label {
+            .score-card .label {
               color: #6b7280;
               font-size: 12px;
             }
 
-            .card .value {
+            .score-card .value {
               margin-top: 8px;
               font-size: 22px;
               font-weight: 800;
@@ -763,56 +766,59 @@ export default function DashboardPage() {
                             ? `Lot #${htmlEscape(vehicle.lot_number)}<br />`
                             : ""
                         }
-                        Source: ${htmlEscape(vehicle.source || "unknown")}
+                        Source: ${htmlEscape(vehicle.source || "unknown")}<br />
+                        Profyt Score: ${htmlEscape(vehicle.profyt_score ?? "-")}/100
                       </div>
                     </div>
 
-                    <div class="score">
-                      <div class="score-label">Profyt Score</div>
-                      <div class="score-value">${htmlEscape(vehicle.profyt_score ?? "-")}/100</div>
-                      <div class="score-mode">Retail Flip Mode</div>
+                    <div class="vehicle-image-box">
+                      ${
+                        vehicle.image_url
+                          ? `<img class="vehicle-image" src="${htmlEscape(vehicle.image_url)}" alt="${htmlEscape(vehicle.title || "Vehicle image")}" />`
+                          : `<div class="vehicle-image-placeholder">No vehicle image available</div>`
+                      }
                     </div>
                   </div>
 
-                  <div class="grid">
-                    <div class="card">
+                  <div class="score-row">
+                    <div class="score-card">
                       <div class="label">Expected Retail Price</div>
                       <div class="value">${money(retailPrice)}</div>
                     </div>
 
-                    <div class="card">
+                    <div class="score-card">
                       <div class="label">Desired Profit</div>
                       <div class="value">${money(desiredProfit)}</div>
                     </div>
 
-                    <div class="card">
+                    <div class="score-card">
                       <div class="label">Recommended Max Bid</div>
                       <div class="value highlight">${money(maxBid)}</div>
                     </div>
 
-                    <div class="card">
+                    <div class="score-card">
                       <div class="label">Auction Fees</div>
                       <div class="value">${money(fees)}</div>
                     </div>
                   </div>
 
-                  <div class="grid">
-                    <div class="card">
+                  <div class="score-row">
+                    <div class="score-card">
                       <div class="label">Estimated Repairs</div>
                       <div class="value">${money(repairs)}</div>
                     </div>
 
-                    <div class="card">
+                    <div class="score-card">
                       <div class="label">Transport</div>
                       <div class="value">${money(transport)}</div>
                     </div>
 
-                    <div class="card">
+                    <div class="score-card">
                       <div class="label">Auction Platform</div>
                       <div class="value">${htmlEscape(vehicle.source || "unknown")}</div>
                     </div>
 
-                    <div class="card">
+                    <div class="score-card">
                       <div class="label">Title</div>
                       <div class="value">${htmlEscape(vehicle.title_status || "Unknown")}</div>
                     </div>
@@ -1053,6 +1059,20 @@ export default function DashboardPage() {
                           onChange={() => toggleVehicleSelection(vehicle.id)}
                           className="mt-1 h-5 w-5 accent-green-500"
                         />
+
+                        <div className="h-24 w-32 shrink-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900">
+                          {vehicle.image_url ? (
+                            <img
+                              src={vehicle.image_url}
+                              alt={vehicle.title || "Vehicle image"}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center px-3 text-center text-xs text-zinc-600">
+                              No image
+                            </div>
+                          )}
+                        </div>
 
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-3">
