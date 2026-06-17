@@ -49,6 +49,13 @@ export default function VehicleDetailPage() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [noteText, setNoteText] = useState("");
   const [message, setMessage] = useState("");
+  const [numbersMessage, setNumbersMessage] = useState("");
+
+  const [retailPriceInput, setRetailPriceInput] = useState("");
+  const [desiredProfitInput, setDesiredProfitInput] = useState("");
+  const [repairsInput, setRepairsInput] = useState("");
+  const [transportInput, setTransportInput] = useState("");
+  const [feesInput, setFeesInput] = useState("");
 
   useEffect(() => {
     loadPage();
@@ -70,7 +77,15 @@ export default function VehicleDetailPage() {
       .eq("id", vehicleId)
       .single();
 
-    setVehicle(vehicleData);
+    if (vehicleData) {
+      setVehicle(vehicleData);
+
+      setRetailPriceInput(String(vehicleData.retail_price ?? vehicleData.market_value ?? 0));
+      setDesiredProfitInput(String(vehicleData.desired_profit ?? vehicleData.target_profit ?? 0));
+      setRepairsInput(String(vehicleData.estimated_repairs ?? 0));
+      setTransportInput(String(vehicleData.estimated_transport ?? 0));
+      setFeesInput(String(vehicleData.estimated_fees ?? 0));
+    }
 
     const { data: noteData } = await supabase
       .from("vehicle_notes")
@@ -79,6 +94,49 @@ export default function VehicleDetailPage() {
       .order("created_at", { ascending: false });
 
     setNotes(noteData || []);
+  }
+
+  function toNumber(value: string) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+  }
+
+  function calculateRecommendedBid() {
+    const retailPrice = toNumber(retailPriceInput);
+    const desiredProfit = toNumber(desiredProfitInput);
+    const repairs = toNumber(repairsInput);
+    const transport = toNumber(transportInput);
+    const fees = toNumber(feesInput);
+
+    return retailPrice - desiredProfit - repairs - transport - fees;
+  }
+
+  async function saveNumbers() {
+    setNumbersMessage("");
+
+    const recommendedBid = calculateRecommendedBid();
+
+    const { error } = await supabase
+      .from("vehicles")
+      .update({
+        retail_price: toNumber(retailPriceInput),
+        market_value: toNumber(retailPriceInput),
+        desired_profit: toNumber(desiredProfitInput),
+        target_profit: toNumber(desiredProfitInput),
+        estimated_repairs: toNumber(repairsInput),
+        estimated_transport: toNumber(transportInput),
+        estimated_fees: toNumber(feesInput),
+        recommended_bid: recommendedBid,
+      })
+      .eq("id", vehicleId);
+
+    if (error) {
+      setNumbersMessage(error.message);
+      return;
+    }
+
+    setNumbersMessage("Numbers saved.");
+    loadPage();
   }
 
   async function addNote() {
@@ -118,20 +176,6 @@ export default function VehicleDetailPage() {
     return `$${Number(value).toLocaleString()}`;
   }
 
-  function getRetailPrice(vehicle: Vehicle) {
-    return vehicle.retail_price ?? vehicle.market_value ?? 0;
-  }
-
-  function calculateRecommendedBid(vehicle: Vehicle) {
-    const retailPrice = getRetailPrice(vehicle);
-    const desiredProfit = vehicle.desired_profit ?? vehicle.target_profit ?? 0;
-    const repairs = vehicle.estimated_repairs ?? 0;
-    const transport = vehicle.estimated_transport ?? 0;
-    const fees = vehicle.estimated_fees ?? 0;
-
-    return retailPrice - desiredProfit - repairs - transport - fees;
-  }
-
   if (!vehicle) {
     return (
       <main className="min-h-screen bg-zinc-950 p-6 text-white">
@@ -140,9 +184,7 @@ export default function VehicleDetailPage() {
     );
   }
 
-  const retailPrice = getRetailPrice(vehicle);
-  const desiredProfit = vehicle.desired_profit ?? vehicle.target_profit ?? 0;
-  const calculatedBid = calculateRecommendedBid(vehicle);
+  const calculatedBid = calculateRecommendedBid();
 
   return (
     <main className="min-h-screen bg-zinc-950 text-white">
@@ -215,14 +257,74 @@ export default function VehicleDetailPage() {
             </div>
           </div>
 
-          <Metric label="Expected Retail Price" value={money(retailPrice)} />
-          <Metric label="Desired Profit" value={money(desiredProfit)} />
+          <Metric
+            label="Expected Retail Price"
+            value={money(toNumber(retailPriceInput))}
+          />
+
+          <Metric
+            label="Desired Profit"
+            value={money(toNumber(desiredProfitInput))}
+          />
 
           <Metric
             label="Recommended Max Bid"
             value={money(calculatedBid)}
             highlight
           />
+        </div>
+
+        <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+          <h2 className="text-2xl font-bold">Edit Profit Numbers</h2>
+
+          <p className="mt-2 text-zinc-400">
+            Update your assumptions. Profytly recalculates the maximum bid instantly.
+          </p>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-5">
+            <NumberField
+              label="Retail Price"
+              value={retailPriceInput}
+              onChange={setRetailPriceInput}
+            />
+
+            <NumberField
+              label="Desired Profit"
+              value={desiredProfitInput}
+              onChange={setDesiredProfitInput}
+            />
+
+            <NumberField
+              label="Repairs"
+              value={repairsInput}
+              onChange={setRepairsInput}
+            />
+
+            <NumberField
+              label="Transport"
+              value={transportInput}
+              onChange={setTransportInput}
+            />
+
+            <NumberField
+              label="Auction Fees"
+              value={feesInput}
+              onChange={setFeesInput}
+            />
+          </div>
+
+          <div className="mt-6 flex flex-wrap items-center gap-4">
+            <button
+              onClick={saveNumbers}
+              className="rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
+            >
+              Save Numbers
+            </button>
+
+            {numbersMessage && (
+              <p className="text-sm text-green-400">{numbersMessage}</p>
+            )}
+          </div>
         </div>
 
         <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
@@ -235,19 +337,29 @@ export default function VehicleDetailPage() {
 
           <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950 p-5">
             <div className="grid gap-3 text-sm md:grid-cols-5">
-              <FormulaItem label="Retail Price" value={money(retailPrice)} />
-              <FormulaItem label="Desired Profit" value={`- ${money(desiredProfit)}`} />
+              <FormulaItem
+                label="Retail Price"
+                value={money(toNumber(retailPriceInput))}
+              />
+
+              <FormulaItem
+                label="Desired Profit"
+                value={`- ${money(toNumber(desiredProfitInput))}`}
+              />
+
               <FormulaItem
                 label="Repairs"
-                value={`- ${money(vehicle.estimated_repairs)}`}
+                value={`- ${money(toNumber(repairsInput))}`}
               />
+
               <FormulaItem
                 label="Transport"
-                value={`- ${money(vehicle.estimated_transport)}`}
+                value={`- ${money(toNumber(transportInput))}`}
               />
+
               <FormulaItem
                 label="Auction Fees"
-                value={`- ${money(vehicle.estimated_fees)}`}
+                value={`- ${money(toNumber(feesInput))}`}
               />
             </div>
 
@@ -257,23 +369,6 @@ export default function VehicleDetailPage() {
                 {money(calculatedBid)}
               </div>
             </div>
-          </div>
-        </div>
-
-        <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-          <h2 className="text-2xl font-bold">Cost Breakdown</h2>
-
-          <div className="mt-6 grid gap-4 md:grid-cols-4">
-            <Metric label="Auction Fees" value={money(vehicle.estimated_fees)} />
-            <Metric
-              label="Transport"
-              value={money(vehicle.estimated_transport)}
-            />
-            <Metric
-              label="Estimated Repairs"
-              value={money(vehicle.estimated_repairs)}
-            />
-            <Metric label="Desired Profit" value={money(desiredProfit)} />
           </div>
         </div>
 
@@ -340,6 +435,28 @@ function Metric({
       >
         {value}
       </div>
+    </div>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div>
+      <label className="text-sm text-zinc-400">{label}</label>
+      <input
+        type="number"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-white outline-none"
+      />
     </div>
   );
 }
