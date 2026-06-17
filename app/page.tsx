@@ -1,6 +1,34 @@
-import { ArrowRight, Calculator, MapPin, ShieldAlert, TrendingUp } from "lucide-react";
+"use client";
+
+import { useState } from "react";
+import {
+  ArrowRight,
+  Calculator,
+  MapPin,
+  ShieldAlert,
+  TrendingUp,
+} from "lucide-react";
 
 export default function Home() {
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function joinWaitlist() {
+    setLoading(true);
+    setMessage("");
+
+    const res = await fetch("/api/waitlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+
+    const data = await res.json();
+    setMessage(data.message || data.error || "Something happened");
+    setLoading(false);
+  }
+
   return (
     <main className="min-h-screen bg-zinc-950 text-white">
       <nav className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
@@ -14,9 +42,12 @@ export default function Home() {
           <a href="#pricing">Pricing</a>
         </div>
 
-        <button className="rounded-lg bg-green-500 px-4 py-2 font-semibold text-black">
+        <a
+          href="#join"
+          className="rounded-lg bg-green-500 px-4 py-2 font-semibold text-black"
+        >
           Join Beta
-        </button>
+        </a>
       </nav>
 
       <section className="mx-auto max-w-7xl px-6 py-20">
@@ -31,19 +62,28 @@ export default function Home() {
           </h1>
 
           <p className="mt-6 max-w-3xl text-xl text-zinc-400">
-            Profytly helps flippers, dealers and auction buyers estimate market value,
-            costs, risk and profit before placing a bid.
+            Profytly helps flippers, dealers and auction buyers estimate market
+            value, costs, risk and profit before placing a bid.
           </p>
 
-          <div className="mt-10 flex flex-wrap gap-4">
-            <button className="flex items-center gap-2 rounded-lg bg-green-500 px-6 py-3 font-semibold text-black hover:bg-green-600">
-              Join Beta <ArrowRight size={18} />
-            </button>
+          <div id="join" className="mt-10 flex max-w-xl flex-col gap-3 sm:flex-row">
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Enter your email"
+              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-white outline-none placeholder:text-zinc-500"
+            />
 
-            <button className="rounded-lg border border-zinc-700 px-6 py-3">
-              View Example Analysis
+            <button
+              onClick={joinWaitlist}
+              disabled={loading}
+              className="flex items-center justify-center gap-2 rounded-lg bg-green-500 px-6 py-3 font-semibold text-black hover:bg-green-600 disabled:opacity-60"
+            >
+              {loading ? "Joining..." : "Join Beta"} <ArrowRight size={18} />
             </button>
           </div>
+
+          {message && <p className="mt-3 text-sm text-green-400">{message}</p>}
         </div>
 
         <div className="mt-20 grid gap-6 lg:grid-cols-3">
@@ -74,7 +114,9 @@ export default function Home() {
 
             <div className="mt-8 rounded-xl border border-zinc-800 bg-zinc-950 p-5">
               <div className="text-sm text-zinc-400">Recommended Max Bid</div>
-              <div className="mt-2 text-4xl font-bold text-green-500">$6,200</div>
+              <div className="mt-2 text-4xl font-bold text-green-500">
+                $6,200
+              </div>
               <p className="mt-2 text-sm text-zinc-500">
                 Based on dealer value, estimated costs and target profit.
               </p>
@@ -106,10 +148,26 @@ export default function Home() {
         </h2>
 
         <div className="mt-10 grid gap-6 md:grid-cols-4">
-          <Feature icon={<Calculator />} title="Auction Fees" text="Estimate Copart and IAAI fees before bidding." />
-          <Feature icon={<MapPin />} title="Local Market" text="Compare estimated private party and dealer values." />
-          <Feature icon={<ShieldAlert />} title="Risk Flags" text="Title, mileage, run status and damage warnings." />
-          <Feature icon={<TrendingUp />} title="Profit Estimate" text="See conservative, recommended and aggressive bid ranges." />
+          <Feature
+            icon={<Calculator />}
+            title="Auction Fees"
+            text="Estimate Copart and IAAI fees before bidding."
+          />
+          <Feature
+            icon={<MapPin />}
+            title="Local Market"
+            text="Compare estimated private party and dealer values."
+          />
+          <Feature
+            icon={<ShieldAlert />}
+            title="Risk Flags"
+            text="Title, mileage, run status and damage warnings."
+          />
+          <Feature
+            icon={<TrendingUp />}
+            title="Profit Estimate"
+            text="See conservative, recommended and aggressive bid ranges."
+          />
         </div>
       </section>
     </main>
