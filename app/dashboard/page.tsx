@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -40,6 +40,10 @@ export default function DashboardPage() {
   const [auctionUrl, setAuctionUrl] = useState("");
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [message, setMessage] = useState("");
+
+  const [searchTerm, setSearchTerm] = useState("");
+  const [titleFilter, setTitleFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("newest");
 
   useEffect(() => {
     loadUserAndVehicles();
@@ -195,6 +199,58 @@ export default function DashboardPage() {
     return retailPrice - desiredProfit - repairs - transport - fees;
   }
 
+  const filteredVehicles = useMemo(() => {
+    const search = searchTerm.toLowerCase().trim();
+
+    let result = vehicles.filter((vehicle) => {
+      const combined = [
+        vehicle.title,
+        vehicle.lot_number,
+        vehicle.location,
+        vehicle.state_code,
+        vehicle.title_status,
+        vehicle.source,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      const matchesSearch = !search || combined.includes(search);
+
+      const status = (vehicle.title_status || "").toLowerCase();
+
+      const matchesFilter =
+        titleFilter === "all" ||
+        (titleFilter === "clean" && status.includes("clean")) ||
+        (titleFilter === "salvage" && status.includes("salvage")) ||
+        (titleFilter === "unknown" && !vehicle.title_status);
+
+      return matchesSearch && matchesFilter;
+    });
+
+    result = [...result].sort((a, b) => {
+      if (sortBy === "highest_max_bid") {
+        return calculateMaxBid(b) - calculateMaxBid(a);
+      }
+
+      if (sortBy === "highest_profit") {
+        return getDesiredProfit(b) - getDesiredProfit(a);
+      }
+
+      if (sortBy === "highest_score") {
+        return (b.profyt_score ?? 0) - (a.profyt_score ?? 0);
+      }
+
+      if (sortBy === "highest_retail") {
+        return getRetailPrice(b) - getRetailPrice(a);
+      }
+
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+
+    return result;
+  }, [vehicles, searchTerm, titleFilter, sortBy]);
+
   async function saveVehicle() {
     setMessage("");
 
@@ -322,15 +378,48 @@ export default function DashboardPage() {
             </div>
 
             <div className="text-sm text-zinc-500">
-              {vehicles.length} saved vehicle{vehicles.length === 1 ? "" : "s"}
+              {filteredVehicles.length} of {vehicles.length} vehicle
+              {vehicles.length === 1 ? "" : "s"}
             </div>
           </div>
 
+          <div className="mt-6 grid gap-3 md:grid-cols-3">
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search make, model, lot, location..."
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none"
+            />
+
+            <select
+              value={titleFilter}
+              onChange={(e) => setTitleFilter(e.target.value)}
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none"
+            >
+              <option value="all">All Titles</option>
+              <option value="clean">Clean Title</option>
+              <option value="salvage">Salvage Title</option>
+              <option value="unknown">Unknown Title</option>
+            </select>
+
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none"
+            >
+              <option value="newest">Newest First</option>
+              <option value="highest_max_bid">Highest Max Bid</option>
+              <option value="highest_profit">Highest Desired Profit</option>
+              <option value="highest_score">Highest Profyt Score</option>
+              <option value="highest_retail">Highest Retail Price</option>
+            </select>
+          </div>
+
           <div className="mt-6 space-y-4">
-            {vehicles.length === 0 ? (
-              <p className="text-zinc-500">No vehicles saved yet.</p>
+            {filteredVehicles.length === 0 ? (
+              <p className="text-zinc-500">No vehicles match your filters.</p>
             ) : (
-              vehicles.map((vehicle) => {
+              filteredVehicles.map((vehicle) => {
                 const maxBid = calculateMaxBid(vehicle);
                 const retailPrice = getRetailPrice(vehicle);
                 const desiredProfit = getDesiredProfit(vehicle);
@@ -364,26 +453,10 @@ export default function DashboardPage() {
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[560px]">
-                        <MiniMetric
-                          label="Retail"
-                          value={money(retailPrice)}
-                        />
-
-                        <MiniMetric
-                          label="Max Bid"
-                          value={money(maxBid)}
-                          highlight
-                        />
-
-                        <MiniMetric
-                          label="Profit"
-                          value={money(desiredProfit)}
-                        />
-
-                        <MiniMetric
-                          label="Score"
-                          value={`${vehicle.profyt_score ?? "-"} / 100`}
-                        />
+                        <MiniMetric label="Retail" value={money(retailPrice)} />
+                        <MiniMetric label="Max Bid" value={money(maxBid)} highlight />
+                        <MiniMetric label="Profit" value={money(desiredProfit)} />
+                        <MiniMetric label="Score" value={`${vehicle.profyt_score ?? "-"} / 100`} />
                       </div>
                     </div>
 
