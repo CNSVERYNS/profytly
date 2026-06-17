@@ -1,10 +1,10 @@
 "use client";
 
-import AppNav from "@/components/AppNav";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import AppNav from "@/components/AppNav";
 
 type Vehicle = {
   id: string;
@@ -13,7 +13,6 @@ type Vehicle = {
   source: string | null;
   lot_number: string | null;
   title: string | null;
-  notes: string | null;
   vehicle_year: string | null;
   vehicle_make: string | null;
   vehicle_model: string | null;
@@ -31,7 +30,25 @@ type Vehicle = {
   estimated_transport: number | null;
   estimated_repairs: number | null;
 
+  is_won: boolean;
+  is_sold: boolean;
   created_at: string;
+};
+
+type ProfileDefaults = {
+  businessName: string;
+  desiredProfit: number;
+  auctionFees: number;
+  transport: number;
+  repairs: number;
+};
+
+const SYSTEM_DEFAULTS: ProfileDefaults = {
+  businessName: "",
+  desiredProfit: 1500,
+  auctionFees: 875,
+  transport: 300,
+  repairs: 900,
 };
 
 export default function DashboardPage() {
@@ -43,6 +60,12 @@ export default function DashboardPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [message, setMessage] = useState("");
 
+  const [loading, setLoading] = useState(true);
+  const [savingVehicle, setSavingVehicle] = useState(false);
+
+  const [profileDefaults, setProfileDefaults] =
+    useState<ProfileDefaults>(SYSTEM_DEFAULTS);
+
   const [searchTerm, setSearchTerm] = useState("");
   const [titleFilter, setTitleFilter] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
@@ -53,24 +76,84 @@ export default function DashboardPage() {
   }, []);
 
   async function loadUserAndVehicles() {
-    const { data } = await supabase.auth.getUser();
+    setLoading(true);
+    setMessage("");
 
-    if (!data.user) {
+    const { data: authData } = await supabase.auth.getUser();
+
+    if (!authData.user) {
       router.push("/login");
       return;
     }
 
-    setUserId(data.user.id);
-    setEmail(data.user.email || "");
+    setUserId(authData.user.id);
+    setEmail(authData.user.email || "");
 
-    const { data: vehicleData } = await supabase
-      .from("vehicles")
-      .select("*")
-      .eq("user_id", data.user.id)
-      .eq("is_won", false)
-      .order("created_at", { ascending: false });
+    const [vehicleResponse, profileResponse] = await Promise.all([
+      supabase
+        .from("vehicles")
+        .select("*")
+        .eq("user_id", authData.user.id)
+        .eq("is_won", false)
+        .order("created_at", { ascending: false }),
 
-    setVehicles(vehicleData || []);
+      supabase
+        .from("profiles")
+        .select(
+          `
+            business_name,
+            default_desired_profit,
+            default_auction_fees,
+            default_transport,
+            default_repairs
+          `
+        )
+        .eq("id", authData.user.id)
+        .maybeSingle(),
+    ]);
+
+    if (vehicleResponse.error) {
+      setMessage(vehicleResponse.error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (profileResponse.error) {
+      setMessage(profileResponse.error.message);
+      setLoading(false);
+      return;
+    }
+
+    const loadedVehicles = vehicleResponse.data || [];
+    const profile = profileResponse.data;
+
+    setVehicles(loadedVehicles);
+
+    setSelectedVehicleIds((current) =>
+      current.filter((id) =>
+        loadedVehicles.some((vehicle) => vehicle.id === id)
+      )
+    );
+
+    setProfileDefaults({
+      businessName: profile?.business_name ?? "",
+      desiredProfit: Number(
+        profile?.default_desired_profit ??
+          SYSTEM_DEFAULTS.desiredProfit
+      ),
+      auctionFees: Number(
+        profile?.default_auction_fees ??
+          SYSTEM_DEFAULTS.auctionFees
+      ),
+      transport: Number(
+        profile?.default_transport ?? SYSTEM_DEFAULTS.transport
+      ),
+      repairs: Number(
+        profile?.default_repairs ?? SYSTEM_DEFAULTS.repairs
+      ),
+    });
+
+    setLoading(false);
   }
 
   function detectSource(url: string) {
@@ -89,10 +172,22 @@ export default function DashboardPage() {
       .split(" ")
       .filter(Boolean)
       .map((word) => {
-        const upperWords = ["LX", "EX", "SE", "LE", "XLE", "AWD", "FWD", "RWD"];
+        const upperWords = [
+          "LX",
+          "EX",
+          "SE",
+          "LE",
+          "XLE",
+          "AWD",
+          "FWD",
+          "RWD",
+        ];
+
         const upper = word.toUpperCase();
 
-        if (upperWords.includes(upper)) return upper;
+        if (upperWords.includes(upper)) {
+          return upper;
+        }
 
         return word.charAt(0).toUpperCase() + word.slice(1);
       })
@@ -101,11 +196,57 @@ export default function DashboardPage() {
 
   function parseAuctionUrl(url: string) {
     const STATES = [
-      "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-      "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-      "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-      "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-      "SD", "TN", "TX", "UT", "VT", "VA", "WV", "WI", "WY", "DC",
+      "AL",
+      "AK",
+      "AZ",
+      "AR",
+      "CA",
+      "CO",
+      "CT",
+      "DE",
+      "FL",
+      "GA",
+      "HI",
+      "ID",
+      "IL",
+      "IN",
+      "IA",
+      "KS",
+      "KY",
+      "LA",
+      "ME",
+      "MD",
+      "MA",
+      "MI",
+      "MN",
+      "MS",
+      "MO",
+      "MT",
+      "NE",
+      "NV",
+      "NH",
+      "NJ",
+      "NM",
+      "NY",
+      "NC",
+      "ND",
+      "OH",
+      "OK",
+      "OR",
+      "PA",
+      "RI",
+      "SC",
+      "SD",
+      "TN",
+      "TX",
+      "UT",
+      "VT",
+      "VA",
+      "WA",
+      "WV",
+      "WI",
+      "WY",
+      "DC",
     ];
 
     const cleanUrl = url.split("?")[0];
@@ -176,12 +317,20 @@ export default function DashboardPage() {
       return `${vehicleYear} ${vehicleMake} ${vehicleModel}`;
     }
 
-    return lotNumber ? `${source.toUpperCase()} Lot ${lotNumber}` : "Saved Vehicle";
+    return lotNumber
+      ? `${source.toUpperCase()} Lot ${lotNumber}`
+      : "Saved Vehicle";
   }
 
   function money(value: number | null | undefined) {
-    if (value === null || value === undefined) return "-";
-    return `$${Number(value).toLocaleString()}`;
+    if (value === null || value === undefined) {
+      return "-";
+    }
+
+    return `$${Number(value).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    })}`;
   }
 
   function getRetailPrice(vehicle: Vehicle) {
@@ -208,6 +357,9 @@ export default function DashboardPage() {
     let result = vehicles.filter((vehicle) => {
       const combined = [
         vehicle.title,
+        vehicle.vehicle_year,
+        vehicle.vehicle_make,
+        vehicle.vehicle_model,
         vehicle.lot_number,
         vehicle.location,
         vehicle.state_code,
@@ -248,7 +400,10 @@ export default function DashboardPage() {
         return getRetailPrice(b) - getRetailPrice(a);
       }
 
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      return (
+        new Date(b.created_at).getTime() -
+        new Date(a.created_at).getTime()
+      );
     });
 
     return result;
@@ -257,14 +412,24 @@ export default function DashboardPage() {
   async function saveVehicle() {
     setMessage("");
 
-    if (!auctionUrl.trim()) {
+    const cleanUrl = auctionUrl.trim();
+
+    if (!cleanUrl) {
       setMessage("Please paste a Copart or IAAI link.");
       return;
     }
 
-    const source = detectSource(auctionUrl);
-    const lotNumber = extractLotNumber(auctionUrl);
-    const parsed = parseAuctionUrl(auctionUrl);
+    const source = detectSource(cleanUrl);
+
+    if (source === "unknown") {
+      setMessage("Please enter a valid Copart or IAAI link.");
+      return;
+    }
+
+    setSavingVehicle(true);
+
+    const lotNumber = extractLotNumber(cleanUrl);
+    const parsed = parseAuctionUrl(cleanUrl);
 
     const title = buildVehicleTitle(
       source,
@@ -274,11 +439,16 @@ export default function DashboardPage() {
       parsed.vehicleModel
     );
 
+    /*
+      Temporary demo retail value until the AI/local market analyzer
+      supplies an actual retail estimate.
+    */
     const retailPrice = 8900;
-    const desiredProfit = 1500;
-    const estimatedFees = 875;
-    const estimatedTransport = 300;
-    const estimatedRepairs = 900;
+
+    const desiredProfit = profileDefaults.desiredProfit;
+    const estimatedFees = profileDefaults.auctionFees;
+    const estimatedTransport = profileDefaults.transport;
+    const estimatedRepairs = profileDefaults.repairs;
 
     const recommendedBid =
       retailPrice -
@@ -289,8 +459,9 @@ export default function DashboardPage() {
 
     const { error } = await supabase.from("vehicles").insert({
       user_id: userId,
-      auction_url: auctionUrl.trim(),
+      auction_url: cleanUrl,
       image_url: null,
+
       source,
       lot_number: lotNumber,
       title,
@@ -302,15 +473,24 @@ export default function DashboardPage() {
       title_status: parsed.titleStatus,
 
       profyt_score: 88,
+
       retail_price: retailPrice,
       market_value: retailPrice,
+
       desired_profit: desiredProfit,
       target_profit: desiredProfit,
-      recommended_bid: recommendedBid,
+
       estimated_fees: estimatedFees,
       estimated_transport: estimatedTransport,
       estimated_repairs: estimatedRepairs,
+
+      recommended_bid: recommendedBid,
+
+      is_won: false,
+      is_sold: false,
     });
+
+    setSavingVehicle(false);
 
     if (error) {
       setMessage(error.message);
@@ -318,8 +498,9 @@ export default function DashboardPage() {
     }
 
     setAuctionUrl("");
-    setMessage("Vehicle saved.");
-    loadUserAndVehicles();
+    setMessage("Vehicle saved using your account defaults.");
+
+    await loadUserAndVehicles();
   }
 
   function toggleVehicleSelection(vehicleId: string) {
@@ -345,13 +526,26 @@ export default function DashboardPage() {
     setSelectedVehicleIds([]);
   }
 
-  function csvEscape(value: string | number | null | undefined) {
-    const text = value === null || value === undefined ? "" : String(value);
+  function getSelectedVehicles() {
+    return vehicles.filter((vehicle) =>
+      selectedVehicleIds.includes(vehicle.id)
+    );
+  }
+
+  function csvEscape(
+    value: string | number | null | undefined
+  ) {
+    const text =
+      value === null || value === undefined ? "" : String(value);
+
     return `"${text.replaceAll('"', '""')}"`;
   }
 
-  function htmlEscape(value: string | number | null | undefined) {
-    const text = value === null || value === undefined ? "" : String(value);
+  function htmlEscape(
+    value: string | number | null | undefined
+  ) {
+    const text =
+      value === null || value === undefined ? "" : String(value);
 
     return text
       .replaceAll("&", "&amp;")
@@ -359,10 +553,6 @@ export default function DashboardPage() {
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
-  }
-
-  function getSelectedVehicles() {
-    return vehicles.filter((vehicle) => selectedVehicleIds.includes(vehicle.id));
   }
 
   function exportSelectedCsv() {
@@ -455,6 +645,7 @@ export default function DashboardPage() {
         <head>
           <title>Profytly Auction Report</title>
           <meta charset="utf-8" />
+
           <style>
             * {
               box-sizing: border-box;
@@ -503,12 +694,12 @@ export default function DashboardPage() {
               padding: 14px;
             }
 
-            .summary-card .label {
+            .summary-label {
               color: #6b7280;
               font-size: 12px;
             }
 
-            .summary-card .value {
+            .summary-value {
               margin-top: 6px;
               font-size: 20px;
               font-weight: 800;
@@ -558,28 +749,28 @@ export default function DashboardPage() {
 
             .vehicle-image-box {
               overflow: hidden;
+              min-height: 180px;
               border: 1px solid #d1d5db;
               border-radius: 14px;
-              min-height: 180px;
               background: #f3f4f6;
             }
 
             .vehicle-image {
+              display: block;
               width: 100%;
               height: 220px;
               object-fit: cover;
-              display: block;
             }
 
             .vehicle-image-placeholder {
-              height: 220px;
               display: flex;
+              height: 220px;
               align-items: center;
               justify-content: center;
-              text-align: center;
-              color: #6b7280;
-              font-size: 13px;
               padding: 16px;
+              color: #6b7280;
+              text-align: center;
+              font-size: 13px;
             }
 
             .score-row {
@@ -595,12 +786,12 @@ export default function DashboardPage() {
               padding: 14px;
             }
 
-            .score-card .label {
+            .score-label {
               color: #6b7280;
               font-size: 12px;
             }
 
-            .score-card .value {
+            .score-value {
               margin-top: 8px;
               font-size: 22px;
               font-weight: 800;
@@ -623,17 +814,17 @@ export default function DashboardPage() {
               font-weight: 800;
             }
 
-            .formula-text {
+            .formula-description {
               margin-top: 8px;
               color: #4b5563;
               font-size: 13px;
             }
 
             .formula-row {
-              margin-top: 16px;
               display: grid;
               grid-template-columns: repeat(5, 1fr);
               gap: 10px;
+              margin-top: 16px;
             }
 
             .formula-item {
@@ -643,12 +834,12 @@ export default function DashboardPage() {
               background: white;
             }
 
-            .formula-item .label {
+            .formula-label {
               color: #6b7280;
               font-size: 11px;
             }
 
-            .formula-item .value {
+            .formula-value {
               margin-top: 6px;
               font-weight: 800;
             }
@@ -659,12 +850,12 @@ export default function DashboardPage() {
               padding-top: 16px;
             }
 
-            .result .label {
+            .result-label {
               color: #6b7280;
               font-size: 12px;
             }
 
-            .result .value {
+            .result-value {
               margin-top: 6px;
               color: #16a34a;
               font-size: 32px;
@@ -673,35 +864,14 @@ export default function DashboardPage() {
 
             .auction-link {
               margin-top: 20px;
-              word-break: break-all;
-              font-size: 12px;
               color: #2563eb;
-            }
-
-            .notes {
-              margin-top: 20px;
-              border: 1px dashed #d1d5db;
-              border-radius: 12px;
-              padding: 16px;
-            }
-
-            .notes-title {
-              font-weight: 800;
-            }
-
-            .notes-text {
-              margin-top: 8px;
-              color: #6b7280;
-              font-size: 13px;
+              font-size: 12px;
+              word-break: break-all;
             }
 
             @media print {
               body {
                 padding: 24px;
-              }
-
-              .no-print {
-                display: none;
               }
             }
           </style>
@@ -709,25 +879,36 @@ export default function DashboardPage() {
 
         <body>
           <div class="cover">
-            <div class="brand">Profyt<span>ly</span></div>
+            <div class="brand">
+              Profyt<span>ly</span>
+            </div>
+
             <div class="subtitle">
-              Auction Watchlist Report • Generated ${htmlEscape(generatedAt)}
+              Auction Watchlist Report • Generated ${htmlEscape(
+                generatedAt
+              )}
             </div>
 
             <div class="summary">
               <div class="summary-card">
-                <div class="label">Selected Vehicles</div>
-                <div class="value">${selectedVehicles.length}</div>
+                <div class="summary-label">Selected Vehicles</div>
+                <div class="summary-value">
+                  ${selectedVehicles.length}
+                </div>
               </div>
 
               <div class="summary-card">
-                <div class="label">Report Type</div>
-                <div class="value">Retail Flip</div>
+                <div class="summary-label">Report Type</div>
+                <div class="summary-value">Retail Flip</div>
               </div>
 
               <div class="summary-card">
-                <div class="label">Generated By</div>
-                <div class="value">Profytly</div>
+                <div class="summary-label">Business</div>
+                <div class="summary-value">
+                  ${htmlEscape(
+                    profileDefaults.businessName || "Profytly User"
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -746,134 +927,204 @@ export default function DashboardPage() {
                   <div class="vehicle-header">
                     <div>
                       <div class="vehicle-title">
-                        ${htmlEscape(vehicle.title || "Saved Vehicle")}
+                        ${htmlEscape(
+                          vehicle.title || "Saved Vehicle"
+                        )}
                       </div>
 
                       ${
                         vehicle.title_status
-                          ? `<div class="badge">${htmlEscape(vehicle.title_status)}</div>`
+                          ? `
+                            <div class="badge">
+                              ${htmlEscape(vehicle.title_status)}
+                            </div>
+                          `
                           : ""
                       }
 
                       <div class="meta">
                         ${
                           vehicle.location
-                            ? `${htmlEscape(vehicle.location)}${
-                                vehicle.state_code ? `, ${htmlEscape(vehicle.state_code)}` : ""
-                              }<br />`
+                            ? `
+                              ${htmlEscape(vehicle.location)}
+                              ${
+                                vehicle.state_code
+                                  ? `, ${htmlEscape(
+                                      vehicle.state_code
+                                    )}`
+                                  : ""
+                              }
+                              <br />
+                            `
                             : ""
                         }
+
                         ${
                           vehicle.lot_number
-                            ? `Lot #${htmlEscape(vehicle.lot_number)}<br />`
+                            ? `
+                              Lot #${htmlEscape(
+                                vehicle.lot_number
+                              )}
+                              <br />
+                            `
                             : ""
                         }
-                        Source: ${htmlEscape(vehicle.source || "unknown")}<br />
-                        Profyt Score: ${htmlEscape(vehicle.profyt_score ?? "-")}/100
+
+                        Source:
+                        ${htmlEscape(
+                          vehicle.source || "unknown"
+                        )}
+
+                        <br />
+
+                        Profyt Score:
+                        ${htmlEscape(
+                          vehicle.profyt_score ?? "-"
+                        )}/100
                       </div>
                     </div>
 
                     <div class="vehicle-image-box">
                       ${
                         vehicle.image_url
-                          ? `<img class="vehicle-image" src="${htmlEscape(vehicle.image_url)}" alt="${htmlEscape(vehicle.title || "Vehicle image")}" />`
-                          : `<div class="vehicle-image-placeholder">No vehicle image available</div>`
+                          ? `
+                            <img
+                              class="vehicle-image"
+                              src="${htmlEscape(
+                                vehicle.image_url
+                              )}"
+                              alt="${htmlEscape(
+                                vehicle.title || "Vehicle image"
+                              )}"
+                            />
+                          `
+                          : `
+                            <div class="vehicle-image-placeholder">
+                              No vehicle image available
+                            </div>
+                          `
                       }
                     </div>
                   </div>
 
                   <div class="score-row">
                     <div class="score-card">
-                      <div class="label">Expected Retail Price</div>
-                      <div class="value">${money(retailPrice)}</div>
+                      <div class="score-label">
+                        Expected Retail Price
+                      </div>
+
+                      <div class="score-value">
+                        ${money(retailPrice)}
+                      </div>
                     </div>
 
                     <div class="score-card">
-                      <div class="label">Desired Profit</div>
-                      <div class="value">${money(desiredProfit)}</div>
+                      <div class="score-label">
+                        Desired Profit
+                      </div>
+
+                      <div class="score-value">
+                        ${money(desiredProfit)}
+                      </div>
                     </div>
 
                     <div class="score-card">
-                      <div class="label">Recommended Max Bid</div>
-                      <div class="value highlight">${money(maxBid)}</div>
+                      <div class="score-label">
+                        Recommended Max Bid
+                      </div>
+
+                      <div class="score-value highlight">
+                        ${money(maxBid)}
+                      </div>
                     </div>
 
                     <div class="score-card">
-                      <div class="label">Auction Fees</div>
-                      <div class="value">${money(fees)}</div>
-                    </div>
-                  </div>
+                      <div class="score-label">
+                        Auction Fees
+                      </div>
 
-                  <div class="score-row">
-                    <div class="score-card">
-                      <div class="label">Estimated Repairs</div>
-                      <div class="value">${money(repairs)}</div>
-                    </div>
-
-                    <div class="score-card">
-                      <div class="label">Transport</div>
-                      <div class="value">${money(transport)}</div>
-                    </div>
-
-                    <div class="score-card">
-                      <div class="label">Auction Platform</div>
-                      <div class="value">${htmlEscape(vehicle.source || "unknown")}</div>
-                    </div>
-
-                    <div class="score-card">
-                      <div class="label">Title</div>
-                      <div class="value">${htmlEscape(vehicle.title_status || "Unknown")}</div>
+                      <div class="score-value">
+                        ${money(fees)}
+                      </div>
                     </div>
                   </div>
 
                   <div class="formula">
-                    <div class="formula-title">Profit Formula</div>
-                    <div class="formula-text">
-                      Recommended Max Bid = Expected Retail Price - Desired Profit - Repairs - Transport - Auction Fees
+                    <div class="formula-title">
+                      Profit Formula
+                    </div>
+
+                    <div class="formula-description">
+                      Recommended Max Bid = Retail Price - Desired
+                      Profit - Repairs - Transport - Auction Fees
                     </div>
 
                     <div class="formula-row">
                       <div class="formula-item">
-                        <div class="label">Retail Price</div>
-                        <div class="value">${money(retailPrice)}</div>
+                        <div class="formula-label">
+                          Retail Price
+                        </div>
+
+                        <div class="formula-value">
+                          ${money(retailPrice)}
+                        </div>
                       </div>
 
                       <div class="formula-item">
-                        <div class="label">Desired Profit</div>
-                        <div class="value">- ${money(desiredProfit)}</div>
+                        <div class="formula-label">
+                          Desired Profit
+                        </div>
+
+                        <div class="formula-value">
+                          - ${money(desiredProfit)}
+                        </div>
                       </div>
 
                       <div class="formula-item">
-                        <div class="label">Repairs</div>
-                        <div class="value">- ${money(repairs)}</div>
+                        <div class="formula-label">
+                          Repairs
+                        </div>
+
+                        <div class="formula-value">
+                          - ${money(repairs)}
+                        </div>
                       </div>
 
                       <div class="formula-item">
-                        <div class="label">Transport</div>
-                        <div class="value">- ${money(transport)}</div>
+                        <div class="formula-label">
+                          Transport
+                        </div>
+
+                        <div class="formula-value">
+                          - ${money(transport)}
+                        </div>
                       </div>
 
                       <div class="formula-item">
-                        <div class="label">Auction Fees</div>
-                        <div class="value">- ${money(fees)}</div>
+                        <div class="formula-label">
+                          Auction Fees
+                        </div>
+
+                        <div class="formula-value">
+                          - ${money(fees)}
+                        </div>
                       </div>
                     </div>
 
                     <div class="result">
-                      <div class="label">Recommended Max Bid</div>
-                      <div class="value">${money(maxBid)}</div>
+                      <div class="result-label">
+                        Recommended Max Bid
+                      </div>
+
+                      <div class="result-value">
+                        ${money(maxBid)}
+                      </div>
                     </div>
                   </div>
 
                   <div class="auction-link">
-                    Auction Link: ${htmlEscape(vehicle.auction_url)}
-                  </div>
-
-                  <div class="notes">
-                    <div class="notes-title">Notes</div>
-                    <div class="notes-text">
-                      Notes and AI risk analysis will be included in future PDF reports.
-                    </div>
+                    Auction Link:
+                    ${htmlEscape(vehicle.auction_url)}
                   </div>
                 </section>
               `;
@@ -892,7 +1143,10 @@ export default function DashboardPage() {
     const printWindow = window.open("", "_blank");
 
     if (!printWindow) {
-      setMessage("Popup blocked. Please allow popups to export PDF.");
+      setMessage(
+        "Popup blocked. Please allow popups to export the PDF."
+      );
+
       return;
     }
 
@@ -901,47 +1155,107 @@ export default function DashboardPage() {
     printWindow.document.close();
   }
 
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-zinc-950 p-6 text-white">
+        Loading workspace...
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-zinc-950 text-white">
       <AppNav />
 
       <section className="mx-auto max-w-7xl px-6 py-10">
-        <p className="text-sm text-zinc-400">Logged in as {email}</p>
+        <p className="text-sm text-zinc-400">
+          Logged in as {email}
+        </p>
 
-        <h1 className="mt-4 text-4xl font-bold">Auction Workspace</h1>
+        <h1 className="mt-4 text-4xl font-bold">
+          Auction Workspace
+        </h1>
 
         <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
           <h2 className="text-xl font-bold">Add Vehicle</h2>
+
           <p className="mt-2 text-zinc-400">
-            Paste a Copart or IAAI link to save it to your watchlist.
+            Paste a Copart or IAAI link to save it to your
+            watchlist.
           </p>
 
           <div className="mt-6 flex flex-col gap-3 md:flex-row">
             <input
               value={auctionUrl}
-              onChange={(e) => setAuctionUrl(e.target.value)}
+              onChange={(event) =>
+                setAuctionUrl(event.target.value)
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !savingVehicle) {
+                  saveVehicle();
+                }
+              }}
               placeholder="https://www.copart.com/lot/85739455/clean-title-2016-kia-sorento-lx-md-baltimore-east"
-              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3"
+              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none focus:border-green-500"
             />
 
             <button
               onClick={saveVehicle}
-              className="rounded-lg bg-green-500 px-6 py-3 font-semibold text-black"
+              disabled={savingVehicle}
+              className="rounded-lg bg-green-500 px-6 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Save Vehicle
+              {savingVehicle ? "Saving..." : "Save Vehicle"}
             </button>
           </div>
 
-          {message && <p className="mt-4 text-sm text-green-400">{message}</p>}
+          <div className="mt-5">
+            <p className="text-xs uppercase tracking-wider text-zinc-500">
+              Starting values from Settings
+            </p>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <MiniMetric
+                label="Desired Profit"
+                value={money(profileDefaults.desiredProfit)}
+              />
+
+              <MiniMetric
+                label="Fallback Fees"
+                value={money(profileDefaults.auctionFees)}
+              />
+
+              <MiniMetric
+                label="Fallback Transport"
+                value={money(profileDefaults.transport)}
+              />
+
+              <MiniMetric
+                label="Fallback Repairs"
+                value={money(profileDefaults.repairs)}
+              />
+            </div>
+
+            <p className="mt-3 text-xs text-zinc-500">
+              These fallback values will be replaced by automatic
+              estimates when the Profytly analyzer is connected.
+            </p>
+          </div>
+
+          {message && (
+            <p className="mt-4 text-sm text-green-400">
+              {message}
+            </p>
+          )}
         </div>
 
         <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
               <h2 className="text-xl font-bold">My Watchlist</h2>
+
               <p className="mt-1 text-sm text-zinc-500">
-                Track vehicles, compare profit potential, and export your auction list.
+                Track vehicles, compare profit potential and export
+                your auction list.
               </p>
             </div>
 
@@ -954,15 +1268,19 @@ export default function DashboardPage() {
           <div className="mt-6 grid gap-3 md:grid-cols-3">
             <input
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(event) =>
+                setSearchTerm(event.target.value)
+              }
               placeholder="Search make, model, lot, location..."
-              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none"
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none focus:border-green-500"
             />
 
             <select
               value={titleFilter}
-              onChange={(e) => setTitleFilter(e.target.value)}
-              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none"
+              onChange={(event) =>
+                setTitleFilter(event.target.value)
+              }
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none focus:border-green-500"
             >
               <option value="all">All Titles</option>
               <option value="clean">Clean Title</option>
@@ -972,14 +1290,22 @@ export default function DashboardPage() {
 
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none"
+              onChange={(event) => setSortBy(event.target.value)}
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none focus:border-green-500"
             >
               <option value="newest">Newest First</option>
-              <option value="highest_max_bid">Highest Max Bid</option>
-              <option value="highest_profit">Highest Desired Profit</option>
-              <option value="highest_score">Highest Profyt Score</option>
-              <option value="highest_retail">Highest Retail Price</option>
+              <option value="highest_max_bid">
+                Highest Max Bid
+              </option>
+              <option value="highest_profit">
+                Highest Desired Profit
+              </option>
+              <option value="highest_score">
+                Highest Profyt Score
+              </option>
+              <option value="highest_retail">
+                Highest Retail Price
+              </option>
             </select>
           </div>
 
@@ -1021,13 +1347,17 @@ export default function DashboardPage() {
 
           <div className="mt-6 space-y-4">
             {filteredVehicles.length === 0 ? (
-              <p className="text-zinc-500">No vehicles match your filters.</p>
+              <p className="text-zinc-500">
+                No vehicles match your filters.
+              </p>
             ) : (
               filteredVehicles.map((vehicle) => {
                 const maxBid = calculateMaxBid(vehicle);
                 const retailPrice = getRetailPrice(vehicle);
                 const desiredProfit = getDesiredProfit(vehicle);
-                const isSelected = selectedVehicleIds.includes(vehicle.id);
+
+                const isSelected =
+                  selectedVehicleIds.includes(vehicle.id);
 
                 return (
                   <div
@@ -1043,7 +1373,9 @@ export default function DashboardPage() {
                         <input
                           type="checkbox"
                           checked={isSelected}
-                          onChange={() => toggleVehicleSelection(vehicle.id)}
+                          onChange={() =>
+                            toggleVehicleSelection(vehicle.id)
+                          }
                           className="mt-1 h-5 w-5 accent-green-500"
                         />
 
@@ -1051,7 +1383,9 @@ export default function DashboardPage() {
                           {vehicle.image_url ? (
                             <img
                               src={vehicle.image_url}
-                              alt={vehicle.title || "Vehicle image"}
+                              alt={
+                                vehicle.title || "Vehicle image"
+                              }
                               className="h-full w-full object-cover"
                             />
                           ) : (
@@ -1076,14 +1410,22 @@ export default function DashboardPage() {
 
                           <div className="mt-2 text-sm text-zinc-500">
                             {vehicle.location &&
-                              `${vehicle.location}${vehicle.state_code ? `, ${vehicle.state_code}` : ""} • `}
-                            {vehicle.source || "unknown"}{" "}
-                            {vehicle.lot_number ? `• Lot: ${vehicle.lot_number}` : ""}
+                              `${vehicle.location}${
+                                vehicle.state_code
+                                  ? `, ${vehicle.state_code}`
+                                  : ""
+                              } • `}
+
+                            {vehicle.source || "unknown"}
+
+                            {vehicle.lot_number
+                              ? ` • Lot: ${vehicle.lot_number}`
+                              : ""}
                           </div>
 
                           <Link
                             href={`/dashboard/vehicle/${vehicle.id}`}
-                            className="mt-4 inline-block text-sm text-green-500"
+                            className="mt-4 inline-block text-sm font-semibold text-green-500"
                           >
                             Open full analysis →
                           </Link>
@@ -1091,10 +1433,28 @@ export default function DashboardPage() {
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[560px]">
-                        <MiniMetric label="Retail" value={money(retailPrice)} />
-                        <MiniMetric label="Max Bid" value={money(maxBid)} highlight />
-                        <MiniMetric label="Profit" value={money(desiredProfit)} />
-                        <MiniMetric label="Score" value={`${vehicle.profyt_score ?? "-"} / 100`} />
+                        <MiniMetric
+                          label="Retail"
+                          value={money(retailPrice)}
+                        />
+
+                        <MiniMetric
+                          label="Max Bid"
+                          value={money(maxBid)}
+                          highlight
+                        />
+
+                        <MiniMetric
+                          label="Profit"
+                          value={money(desiredProfit)}
+                        />
+
+                        <MiniMetric
+                          label="Score"
+                          value={`${
+                            vehicle.profyt_score ?? "-"
+                          } / 100`}
+                        />
                       </div>
                     </div>
                   </div>
@@ -1119,14 +1479,16 @@ function MiniMetric({
 }) {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3">
-      <div className="text-xs text-zinc-500">{label}</div>
-      <div
+      <p className="text-xs text-zinc-500">{label}</p>
+
+      <p
         className={`mt-1 font-bold ${
           highlight ? "text-green-500" : "text-white"
         }`}
       >
         {value}
-      </div>
+      </p>
     </div>
   );
 }
+
