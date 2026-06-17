@@ -48,8 +48,17 @@ export default function VehicleDetailPage() {
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [noteText, setNoteText] = useState("");
+
   const [message, setMessage] = useState("");
   const [numbersMessage, setNumbersMessage] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
+
+  const [titleInput, setTitleInput] = useState("");
+  const [titleStatusInput, setTitleStatusInput] = useState("");
+  const [locationInput, setLocationInput] = useState("");
+  const [stateCodeInput, setStateCodeInput] = useState("");
+  const [sourceInput, setSourceInput] = useState("");
+  const [lotNumberInput, setLotNumberInput] = useState("");
 
   const [retailPriceInput, setRetailPriceInput] = useState("");
   const [desiredProfitInput, setDesiredProfitInput] = useState("");
@@ -80,6 +89,13 @@ export default function VehicleDetailPage() {
     if (vehicleData) {
       setVehicle(vehicleData);
 
+      setTitleInput(vehicleData.title ?? "");
+      setTitleStatusInput(vehicleData.title_status ?? "");
+      setLocationInput(vehicleData.location ?? "");
+      setStateCodeInput(vehicleData.state_code ?? "");
+      setSourceInput(vehicleData.source ?? "");
+      setLotNumberInput(vehicleData.lot_number ?? "");
+
       setRetailPriceInput(String(vehicleData.retail_price ?? vehicleData.market_value ?? 0));
       setDesiredProfitInput(String(vehicleData.desired_profit ?? vehicleData.target_profit ?? 0));
       setRepairsInput(String(vehicleData.estimated_repairs ?? 0));
@@ -101,6 +117,11 @@ export default function VehicleDetailPage() {
     return Number.isFinite(num) ? num : 0;
   }
 
+  function nullIfEmpty(value: string) {
+    const cleaned = value.trim();
+    return cleaned.length > 0 ? cleaned : null;
+  }
+
   function calculateRecommendedBid() {
     const retailPrice = toNumber(retailPriceInput);
     const desiredProfit = toNumber(desiredProfitInput);
@@ -109,6 +130,30 @@ export default function VehicleDetailPage() {
     const fees = toNumber(feesInput);
 
     return retailPrice - desiredProfit - repairs - transport - fees;
+  }
+
+  async function saveVehicleInfo() {
+    setInfoMessage("");
+
+    const { error } = await supabase
+      .from("vehicles")
+      .update({
+        title: nullIfEmpty(titleInput) || "Saved Vehicle",
+        title_status: nullIfEmpty(titleStatusInput),
+        location: nullIfEmpty(locationInput),
+        state_code: nullIfEmpty(stateCodeInput)?.toUpperCase() || null,
+        source: nullIfEmpty(sourceInput),
+        lot_number: nullIfEmpty(lotNumberInput),
+      })
+      .eq("id", vehicleId);
+
+    if (error) {
+      setInfoMessage(error.message);
+      return;
+    }
+
+    setInfoMessage("Vehicle info saved.");
+    loadPage();
   }
 
   async function saveNumbers() {
@@ -275,6 +320,71 @@ export default function VehicleDetailPage() {
         </div>
 
         <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+          <h2 className="text-2xl font-bold">Edit Vehicle Info</h2>
+
+          <p className="mt-2 text-zinc-400">
+            Fix vehicle details manually when the auction link does not include full information.
+          </p>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <TextField
+              label="Vehicle Title"
+              value={titleInput}
+              onChange={setTitleInput}
+              placeholder="2016 Kia Sorento LX"
+            />
+
+            <TextField
+              label="Title Status"
+              value={titleStatusInput}
+              onChange={setTitleStatusInput}
+              placeholder="Clean Title"
+            />
+
+            <TextField
+              label="Location"
+              value={locationInput}
+              onChange={setLocationInput}
+              placeholder="Baltimore East"
+            />
+
+            <TextField
+              label="State"
+              value={stateCodeInput}
+              onChange={setStateCodeInput}
+              placeholder="MD"
+            />
+
+            <TextField
+              label="Source"
+              value={sourceInput}
+              onChange={setSourceInput}
+              placeholder="copart"
+            />
+
+            <TextField
+              label="Lot Number"
+              value={lotNumberInput}
+              onChange={setLotNumberInput}
+              placeholder="85739455"
+            />
+          </div>
+
+          <div className="mt-6 flex flex-wrap items-center gap-4">
+            <button
+              onClick={saveVehicleInfo}
+              className="rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
+            >
+              Save Vehicle Info
+            </button>
+
+            {infoMessage && (
+              <p className="text-sm text-green-400">{infoMessage}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
           <h2 className="text-2xl font-bold">Edit Profit Numbers</h2>
 
           <p className="mt-2 text-zinc-400">
@@ -435,6 +545,30 @@ function Metric({
       >
         {value}
       </div>
+    </div>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div>
+      <label className="text-sm text-zinc-400">{label}</label>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-white outline-none"
+      />
     </div>
   );
 }
