@@ -1155,24 +1155,39 @@ export default function VehicleDetailPage() {
 
                 {marketAnalysis && (
                   <>
-                    <StatusBadge
-                      label={
-                        marketAnalysis.status === "completed"
-                          ? "Completed"
-                          : marketAnalysis.status === "limited"
-                            ? "Limited"
-                            : marketAnalysis.status === "failed"
-                              ? "Failed"
-                              : "Pending"
-                      }
-                      variant={
-                        marketAnalysis.status === "completed"
-                          ? "green"
-                          : marketAnalysis.status === "limited"
-                            ? "amber"
-                            : "neutral"
-                      }
-                    />
+                    {marketAnalysis.status === "completed" ? (
+                      <StatusBadge
+                        label={
+                          marketAnalysis.vision_used
+                            ? "Vision Verified"
+                            : "Analysis Complete"
+                        }
+                        variant="green"
+                      />
+                    ) : marketAnalysis.status === "limited" ? (
+                      <>
+                        {marketAnalysis.vision_used && (
+                          <StatusBadge
+                            label="Vision Verified"
+                            variant="green"
+                          />
+                        )}
+
+                        <StatusBadge
+                          label="Market Data Limited"
+                          variant="amber"
+                        />
+                      </>
+                    ) : (
+                      <StatusBadge
+                        label={
+                          marketAnalysis.status === "failed"
+                            ? "Failed"
+                            : "Pending"
+                        }
+                        variant="neutral"
+                      />
+                    )}
 
                     {marketAnalysis.recommendation && (
                       <RecommendationBadge
@@ -1514,37 +1529,9 @@ export default function VehicleDetailPage() {
                   </div>
                 )}
 
-              {marketAnalysis.search_sources &&
-                marketAnalysis.search_sources.length > 0 && (
-                  <div className="mt-6">
-                    <h3 className="text-lg font-bold">
-                      Research Sources
-                    </h3>
-
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      {marketAnalysis.search_sources.map(
-                        (source, index) => (
-                          <a
-                            key={`${source.url}-${index}`}
-                            href={source.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 transition hover:border-zinc-600"
-                          >
-                            <p className="line-clamp-2 font-semibold text-zinc-200">
-                              {source.title ||
-                                new URL(source.url).hostname}
-                            </p>
-
-                            <p className="mt-2 truncate text-xs text-zinc-500">
-                              {source.url}
-                            </p>
-                          </a>
-                        )
-                      )}
-                    </div>
-                  </div>
-                )}
+              <p className="mt-5 text-xs text-zinc-500">
+                Open Listing links above are the market evidence used for comparable pricing.
+              </p>
             </>
           )}
         </div>
@@ -1564,23 +1551,28 @@ export default function VehicleDetailPage() {
           />
 
           <Metric
-            label="Primary Damage"
+            label="Primary Damage / AI Finding"
             value={
-              vehicle.primary_damage || "Not available"
+              vehicle.primary_damage ||
+              marketAnalysis?.visible_damage?.[0] ||
+              "Not provided by the auction source"
             }
           />
 
           <Metric
-            label="Secondary Damage"
+            label="Secondary Damage / AI Finding"
             value={
-              vehicle.secondary_damage || "Not available"
+              vehicle.secondary_damage ||
+              marketAnalysis?.visible_damage?.[1] ||
+              "No secondary finding reported"
             }
           />
 
           <Metric
-            label="Run Condition"
+            label="Auction Run Condition"
             value={
-              vehicle.run_condition || "Not available"
+              vehicle.run_condition ||
+              "Not provided by the auction source"
             }
           />
         </div>
@@ -2049,7 +2041,7 @@ function RecommendationBadge({
     buy: "Buy",
     watch: "Watch",
     avoid: "Avoid",
-    insufficient_data: "Insufficient Data",
+    insufficient_data: "Decision Pending",
   };
 
   const styles = {

@@ -1,21 +1,22 @@
-Profytly Vision-First Mileage Upgrade
+Profytly Analysis Quality Fix
 
-What changed
-- Removes Listing Mileage, Working Mileage and mileage-mismatch UI.
-- Shows one final Mileage value.
-- A clearly readable odometer photo becomes the primary mileage source.
-- Reliable Vision mileage is saved automatically to vehicles.mileage.
-- Manual Mileage and Mileage Unit remain available only as fallback/correction fields.
-- Market research uses the Vision mileage when it can be read.
-- Auction-listing mileage no longer blocks or downgrades the recommendation.
-- No Supabase SQL migration is required.
+Updated files:
+- app/api/market-analysis/route.ts
+- app/dashboard/vehicle/[id]/page.tsx
 
-Install
-1. Commit or back up the current working version.
-2. Extract this archive in the Profytly project root.
-3. Run:
-   npx tsc --noEmit
-   npm run build
-   npm run dev
-4. Upload an odometer photo and run Full AI Analysis.
-5. Confirm the single Mileage field is filled automatically.
+Changes:
+1. AI may no longer claim Copart/listing facts were verified unless they were explicitly supplied or clearly visible in uploaded photos.
+2. Summary, warnings and factor text are cleaned of Markdown links and raw URLs.
+3. Comparable vehicles must be unique individual vehicle-detail pages with both price and mileage.
+4. Generic model pages, search-result pages, duplicate URLs and weak comparable pages are filtered out.
+5. AI status labels now distinguish Vision Verified from Market Data Limited.
+6. "Insufficient Data" is shown as "Decision Pending" in the user interface.
+7. Duplicate Research Sources cards were removed because Open Listing links already show the evidence.
+8. Damage cards fall back to AI vision findings when auction damage fields are unavailable.
+
+No SQL migration is required.
+
+After extracting, run:
+  npx tsc --noEmit
+  npm run build
+  npm run dev
