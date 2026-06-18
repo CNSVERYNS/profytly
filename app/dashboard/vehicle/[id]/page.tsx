@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 
 import AppNav from "@/components/AppNav";
+import VehicleAnalysisImageUploader from "@/components/VehicleAnalysisImageUploader";
 import { supabase } from "@/lib/supabase";
 
 import {
@@ -1117,6 +1118,13 @@ export default function VehicleDetailPage() {
               </div>
             </div>
           )}
+
+        <VehicleAnalysisImageUploader
+          vehicleId={vehicle.id}
+          userId={userId}
+          analysisRunning={runningMarketAnalysis}
+          onRunAnalysis={runAiMarketAnalysis}
+        />
 
         <div className="mt-8 rounded-2xl border border-green-500/20 bg-gradient-to-br from-green-500/10 via-zinc-900 to-zinc-900 p-6">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">

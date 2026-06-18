@@ -1,26 +1,29 @@
-PROFYTLY AUTOMATIC AI + VISION UPGRADE
+PROFYTLY — PRIVATE AUCTION PHOTO UPLOAD + AI VISION
 
-Changed files:
-- app/api/market-analysis/route.ts
-- app/dashboard/page.tsx
+This package updates:
+- components/VehicleAnalysisImageUploader.tsx (new)
 - app/dashboard/vehicle/[id]/page.tsx
-- lib/market-analysis-client.ts
-- supabase/ai-vision-analysis-upgrade.sql
+- app/api/market-analysis/route.ts
 
-What changes:
-1. Analyze Vehicle now saves the vehicle and automatically runs AI analysis.
-2. Repaired resale value and repair cost are separated, preventing damage double-counting.
-3. Up to 6 available auction images are sent to OpenAI Vision.
-4. As-is value, visible damage and hidden-damage risks are stored.
-5. Only comparable listing URLs actually present in web-search sources are displayed.
-6. Dashboard prefers stored AI market value and recommended max bid.
+What it adds:
+- Upload up to 6 private JPG/PNG/WEBP auction photos per vehicle.
+- Preview and delete uploaded photos.
+- Run AI Vision directly after upload.
+- Market-analysis API reads the private image records, creates short-lived signed URLs, and sends the photos to OpenAI Vision.
+- Existing public auction image URLs remain supported and are used first.
 
-Important:
-- Vision only runs when image_url or auction_images contains accessible HTTPS images.
-- This package does not add Copart scraping or anti-bot bypassing.
-- Run the SQL file before replacing the TypeScript files.
+Before extracting this package, the following Supabase items must already exist:
+- private bucket: vehicle-analysis-images
+- table: vehicle_analysis_images
+- RLS policies for the table and storage.objects
 
-Verification:
-  npx tsc --noEmit
-  npm run build
-  npm run dev
+After extracting:
+1. npx tsc --noEmit
+2. npm run build
+3. npm run dev
+
+Test:
+- Open an existing vehicle.
+- Upload 4–6 Copart photos.
+- Click Run Vision Analysis.
+- Confirm Vision Evidence shows the number of images analyzed and repair estimate changes.

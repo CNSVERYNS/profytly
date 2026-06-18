@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -285,10 +285,23 @@ export async function POST(request: NextRequest) {
       900
     ) ?? 900;
 
-  const imageUrls = normalizeImageUrls(
+  const publicImageUrls = normalizeImageUrls(
     [vehicle.image_url, ...normalizeUnknownStringArray(vehicle.auction_images)],
     MAX_VISION_IMAGES
   );
+
+  const privateImageUrls = await getPrivateVehicleImageUrls(
+    supabase,
+    vehicle.id,
+    user.id,
+    Math.max(0, MAX_VISION_IMAGES - publicImageUrls.length)
+  );
+
+  const imageUrls = normalizeImageUrls(
+    [...publicImageUrls, ...privateImageUrls],
+    MAX_VISION_IMAGES
+  );
+
   const visionUsed = imageUrls.length > 0;
 
   const inputSnapshot = {
@@ -656,6 +669,52 @@ export async function POST(request: NextRequest) {
       modelName: model,
     },
   });
+}
+
+
+async function getPrivateVehicleImageUrls(
+  supabase: SupabaseClient,
+  vehicleId: string,
+  userId: string,
+  limit: number
+) {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const { data: imageRows, error: imageRowsError } = await supabase
+    .from("vehicle_analysis_images")
+    .select("storage_path, bucket_id, sort_order, created_at")
+    .eq("vehicle_id", vehicleId)
+    .eq("user_id", userId)
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: true })
+    .limit(limit);
+
+  if (imageRowsError || !imageRows || imageRows.length === 0) {
+    return [];
+  }
+
+  const signedUrls: string[] = [];
+
+  for (const imageRow of imageRows) {
+    const bucketId = cleanText(imageRow.bucket_id) || "vehicle-analysis-images";
+    const storagePath = cleanText(imageRow.storage_path);
+
+    if (!storagePath) {
+      continue;
+    }
+
+    const { data: signedData, error: signedError } = await supabase.storage
+      .from(bucketId)
+      .createSignedUrl(storagePath, 20 * 60);
+
+    if (!signedError && signedData?.signedUrl) {
+      signedUrls.push(signedData.signedUrl);
+    }
+  }
+
+  return signedUrls;
 }
 
 function buildInstructions(visionUsed: boolean) {
