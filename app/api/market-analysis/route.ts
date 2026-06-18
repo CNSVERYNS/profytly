@@ -26,9 +26,6 @@ type VehicleRow = {
   title_status: string | null;
   mileage: number | string | null;
   mileage_unit: string | null;
-  listing_mileage: number | string | null;
-  listing_mileage_unit: string | null;
-  listing_mileage_captured_at: string | null;
   primary_damage: string | null;
   secondary_damage: string | null;
   run_condition: string | null;
@@ -416,10 +413,12 @@ export async function POST(request: NextRequest) {
       year: vehicle.vehicle_year,
       make: vehicle.vehicle_make,
       model: vehicle.vehicle_model,
-      listing_mileage: nullableNumber(vehicle.listing_mileage),
-      listing_mileage_unit: vehicle.listing_mileage_unit,
-      working_mileage: nullableNumber(vehicle.mileage),
-      working_mileage_unit: vehicle.mileage_unit,
+      mileage: nullableNumber(vehicle.mileage),
+      mileage_unit: vehicle.mileage_unit,
+      mileage_source:
+        nullableNumber(vehicle.mileage) !== null
+          ? "manual_or_previous_vision"
+          : null,
       title_status: vehicle.title_status,
       primary_damage: vehicle.primary_damage,
       secondary_damage: vehicle.secondary_damage,
@@ -554,18 +553,7 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
     rawSearchSources
   );
 
-  const effectiveListingMileage =
-    nullableNumber(vehicle.listing_mileage) ??
-    listingEvidence?.mileage ??
-    null;
-
-  const effectiveListingMileageUnit =
-    vehicle.listing_mileage_unit ||
-    listingEvidence?.mileageUnit ||
-    null;
-
   const sameEvidenceAsPrevious =
-    !listingEvidence &&
     previousAnalysis !== null &&
     analysisInputsMatch(
       previousAnalysis.input_snapshot,
@@ -729,12 +717,16 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
   const detectedMileageUnit = visionUsed
     ? normalizeMileageUnit(aiOutput.detected_mileage_unit)
     : null;
-  const mileageMismatch = calculateMileageMismatch(
-    effectiveListingMileage,
-    effectiveListingMileageUnit,
-    detectedMileage,
-    detectedMileageUnit
-  );
+
+  const shouldUseVisionMileage =
+    detectedMileage !== null &&
+    detectedMileage > 0;
+
+  const resolvedMileageUnit =
+    detectedMileageUnit === "km" ? "km" : "miles";
+
+  // Vision mileage is the single primary mileage source.
+  const mileageMismatch = false;
 
   const repairCostUsed = repairCostEstimate ?? fallbackRepairs;
   const recommendedBid =
@@ -781,8 +773,7 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
     aiOutput.status === "completed" &&
     marketValueEstimate !== null &&
     confidenceScore >= 35 &&
-    !requiresVisionButMissing &&
-    !mileageMismatch
+    !requiresVisionButMissing
       ? "completed"
       : "limited";
 
@@ -799,12 +790,6 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
     12
   );
 
-  if (listingEvidence && vehicle.listing_mileage === null) {
-    warnings.unshift(
-      `Auction-listing mileage was captured from the exact ${vehicle.source || "auction"} lot page: ${listingEvidence.mileage.toLocaleString()} ${listingEvidence.mileageUnit}.`
-    );
-  }
-
   if (sameEvidenceAsPrevious) {
     warnings.push(
       "Repeated-analysis values were stabilized against the prior result because the vehicle evidence and assumptions did not change."
@@ -816,11 +801,12 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
       "Auction photos were not available to the vision model, so the repair estimate cannot be visually verified."
     );
   }
-  if (mileageMismatch && detectedMileage !== null) {
+  if (visionUsed && detectedMileage === null) {
     warnings.unshift(
-      `Vision detected ${detectedMileage.toLocaleString()} ${detectedMileageUnit || "miles"}, which does not match the auction-listing mileage. Verify the odometer before bidding.`
+      "The odometer could not be read confidently from the supplied photos. Enter mileage manually before relying on the valuation."
     );
   }
+
   if (finalStatus === "limited" && !containsLimitedWarning(warnings)) {
     warnings.push("Limited reliable evidence was available for this analysis.");
   }
@@ -900,21 +886,9 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
     profyt_score: profytScore,
   };
 
-  if (
-    listingEvidence &&
-    nullableNumber(vehicle.listing_mileage) === null
-  ) {
-    vehicleUpdates.listing_mileage = listingEvidence.mileage;
-    vehicleUpdates.listing_mileage_unit =
-      listingEvidence.mileageUnit;
-    vehicleUpdates.listing_mileage_captured_at =
-      new Date().toISOString();
-
-    if (nullableNumber(vehicle.mileage) === null) {
-      vehicleUpdates.mileage = listingEvidence.mileage;
-      vehicleUpdates.mileage_unit =
-        listingEvidence.mileageUnit;
-    }
+  if (shouldUseVisionMileage && detectedMileage !== null) {
+    vehicleUpdates.mileage = detectedMileage;
+    vehicleUpdates.mileage_unit = resolvedMileageUnit;
   }
 
   const { error: vehicleUpdateError } = await supabase
@@ -1191,10 +1165,9 @@ function analysisInputsMatch(
     "year",
     "make",
     "model",
-    "listing_mileage",
-    "listing_mileage_unit",
-    "working_mileage",
-    "working_mileage_unit",
+    "mileage",
+    "mileage_unit",
+    "mileage_source",
     "title_status",
     "primary_damage",
     "secondary_damage",
@@ -1367,19 +1340,17 @@ MARKET RESEARCH RULES:
 - Every comparable URL must come from a web-search source actually opened during this request. Never invent a URL.
 - Return no more than 8 strong comparable listings.
 
-AUCTION-LISTING EVIDENCE RULES:
-- Open the exact vehicle.auction_url before general market research.
-- auction_listing_evidence may be populated only from that exact Copart or IAAI lot page, not from a comparable listing, search snippet for another lot, an image odometer, or the working mileage.
-- The evidence source URL must identify the same lot_number.
-- When the exact lot page clearly states an odometer reading, return it in auction_listing_evidence with confidence_score 80 or higher.
-- When the exact lot page cannot be opened or the mileage is not explicitly shown, return null mileage and source_url and use a low confidence score.
-- Never copy detected_mileage from the dashboard photo into auction_listing_evidence.
-
-DAMAGE, VISION AND ODOMETER RULES:
+VISION-FIRST MILEAGE RULES:
 - Vision images supplied: ${visionUsed ? "yes" : "no"}.
+- Inspect the supplied photos for an odometer or instrument-cluster image.
+- When the odometer is clearly readable, return detected_mileage and detected_mileage_unit and use that mileage when selecting comparable vehicles and estimating repaired resale value.
+- The detected odometer reading is the primary mileage source for this analysis.
+- When the odometer is unclear, partially hidden, illuminated ambiguously or not present, return detected_mileage as null rather than guessing.
+- vehicle.mileage is only a manual or previous-vision fallback when no reliable odometer reading is available.
+- For schema compatibility, return auction_listing_evidence with null lot_number, mileage, mileage_unit and source_url, and confidence_score 0. Do not spend research effort trying to extract mileage from the auction page.
+
+DAMAGE AND VISION RULES:
 - If images are supplied, inspect only what is actually visible. Identify damaged exterior/interior parts, deployed airbags, wheel-angle or suspension clues, cooling-pack exposure, broken glass, missing parts, flood/fire clues and panel gaps.
-- Read the odometer only when it is clearly visible. Return detected_mileage and detected_mileage_unit; otherwise return null.
-- Compare detected mileage against vehicle.listing_mileage when it is available. The working mileage may be manually entered or vision-accepted and must not be treated as verified auction-listing mileage.
 - Do not claim hidden structural, drivetrain or mechanical damage is confirmed from photographs.
 - Put possible unseen problems in hidden_damage_risks, not visible_damage.
 - If no images are supplied, vision_confidence_score must be 0, detected_mileage must be null and visible_damage must be empty. Explain that the repair estimate is not visually verified.
@@ -1475,33 +1446,6 @@ function normalizeMileageUnit(
   return null;
 }
 
-function mileageToMiles(
-  mileage: number | null,
-  unit: string | null
-) {
-  if (mileage === null) return null;
-  return unit?.toLowerCase() === "km"
-    ? mileage * 0.621371
-    : mileage;
-}
-
-function calculateMileageMismatch(
-  savedMileage: number | null,
-  savedUnit: string | null,
-  detectedMileage: number | null,
-  detectedUnit: string | null
-) {
-  const savedMiles = mileageToMiles(savedMileage, savedUnit);
-  const detectedMiles = mileageToMiles(
-    detectedMileage,
-    detectedUnit === "unknown" ? savedUnit : detectedUnit
-  );
-
-  if (savedMiles === null || detectedMiles === null) return false;
-
-  const tolerance = Math.max(500, savedMiles * 0.01);
-  return Math.abs(savedMiles - detectedMiles) > tolerance;
-}
 
 function normalizeRepairRisk(
   value: unknown
