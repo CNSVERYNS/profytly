@@ -24,7 +24,16 @@ export type MarketAnalysisResult = {
   marketValueHigh: number | null;
   marketValueEstimate: number | null;
 
+  asIsValueLow: number | null;
+  asIsValueHigh: number | null;
+  asIsValueEstimate: number | null;
+
   confidenceScore: number;
+  visionUsed: boolean;
+  visionConfidenceScore: number;
+  imageCountAnalyzed: number;
+  visibleDamage: string[];
+  hiddenDamageRisks: string[];
 
   repairRisk: "low" | "medium" | "high" | "unknown";
   riskScore: number;

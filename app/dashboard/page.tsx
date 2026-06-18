@@ -11,6 +11,7 @@ import {
   analyzeVehicleUrl,
   type AuctionAnalysis,
 } from "@/lib/analyze-vehicle-client";
+import { runMarketAnalysis } from "@/lib/market-analysis-client";
 
 type Vehicle = {
   id: string;
@@ -271,7 +272,7 @@ export default function DashboardPage() {
 
   function getRetailPrice(vehicle: Vehicle): number | null {
     const value =
-      vehicle.retail_price ?? vehicle.market_value ?? null;
+      vehicle.market_value ?? vehicle.retail_price ?? null;
 
     return nullableNumber(value);
   }
@@ -285,10 +286,18 @@ export default function DashboardPage() {
   }
 
   function calculateMaxBid(vehicle: Vehicle): number | null {
+    const storedRecommendedBid = nullableNumber(
+      vehicle.recommended_bid
+    );
+
+    if (storedRecommendedBid !== null) {
+      return storedRecommendedBid;
+    }
+
     const retailPrice = getRetailPrice(vehicle);
 
     if (retailPrice === null) {
-      return nullableNumber(vehicle.recommended_bid);
+      return null;
     }
 
     const desiredProfit = getDesiredProfit(vehicle);
@@ -395,22 +404,20 @@ export default function DashboardPage() {
     }
 
     setSavingVehicle(true);
-    setMessage("Analyzing auction vehicle...");
+    setMessage("Reading auction listing...");
 
-    let analysis: AuctionAnalysis;
+    let auctionAnalysis: AuctionAnalysis;
 
     try {
-      analysis = await analyzeVehicleUrl(cleanUrl);
+      auctionAnalysis = await analyzeVehicleUrl(cleanUrl);
     } catch (error) {
       setSavingVehicle(false);
       setMessageIsError(true);
-
       setMessage(
         error instanceof Error
           ? error.message
           : "The vehicle could not be analyzed."
       );
-
       return;
     }
 
@@ -419,75 +426,92 @@ export default function DashboardPage() {
     const estimatedTransport = profileDefaults.transport;
     const estimatedRepairs = profileDefaults.repairs;
 
-    const { error } = await supabase.from("vehicles").insert({
-      user_id: userId,
+    setMessage("Saving vehicle and starting AI analysis...");
 
-      auction_url: analysis.auctionUrl,
-      image_url: analysis.imageUrl,
+    const { data: insertedVehicle, error: insertError } =
+      await supabase
+        .from("vehicles")
+        .insert({
+          user_id: userId,
+          auction_url: auctionAnalysis.auctionUrl,
+          image_url: auctionAnalysis.imageUrl,
+          source: auctionAnalysis.source,
+          lot_number: auctionAnalysis.lotNumber,
+          title: auctionAnalysis.title,
+          vehicle_year: auctionAnalysis.vehicleYear,
+          vehicle_make: auctionAnalysis.vehicleMake,
+          vehicle_model: auctionAnalysis.vehicleModel,
+          location: auctionAnalysis.location,
+          state_code: auctionAnalysis.stateCode,
+          title_status: auctionAnalysis.titleStatus,
+          mileage: auctionAnalysis.mileage?.value ?? null,
+          mileage_unit: auctionAnalysis.mileage?.unit ?? null,
+          primary_damage: auctionAnalysis.primaryDamage,
+          secondary_damage: auctionAnalysis.secondaryDamage,
+          run_condition: auctionAnalysis.runCondition,
+          analysis_status: auctionAnalysis.analysisStatus,
+          analysis_warnings: auctionAnalysis.warnings,
+          auction_images: auctionAnalysis.images,
+          auction_page_title: auctionAnalysis.pageTitle,
+          auction_description: auctionAnalysis.description,
+          analyzed_at: auctionAnalysis.analyzedAt,
+          retail_price: null,
+          market_value: null,
+          recommended_bid: null,
+          profyt_score: null,
+          desired_profit: desiredProfit,
+          target_profit: desiredProfit,
+          estimated_fees: estimatedFees,
+          estimated_transport: estimatedTransport,
+          estimated_repairs: estimatedRepairs,
+          is_won: false,
+          is_sold: false,
+        })
+        .select("id")
+        .single();
 
-      source: analysis.source,
-      lot_number: analysis.lotNumber,
-      title: analysis.title,
-
-      vehicle_year: analysis.vehicleYear,
-      vehicle_make: analysis.vehicleMake,
-      vehicle_model: analysis.vehicleModel,
-
-      location: analysis.location,
-      state_code: analysis.stateCode,
-      title_status: analysis.titleStatus,
-
-      mileage: analysis.mileage?.value ?? null,
-      mileage_unit: analysis.mileage?.unit ?? null,
-
-      primary_damage: analysis.primaryDamage,
-      secondary_damage: analysis.secondaryDamage,
-      run_condition: analysis.runCondition,
-
-      analysis_status: analysis.analysisStatus,
-      analysis_warnings: analysis.warnings,
-      auction_images: analysis.images,
-
-      auction_page_title: analysis.pageTitle,
-      auction_description: analysis.description,
-      analyzed_at: analysis.analyzedAt,
-
-      retail_price: null,
-      market_value: null,
-      recommended_bid: null,
-      profyt_score: null,
-
-      desired_profit: desiredProfit,
-      target_profit: desiredProfit,
-
-      estimated_fees: estimatedFees,
-      estimated_transport: estimatedTransport,
-      estimated_repairs: estimatedRepairs,
-
-      is_won: false,
-      is_sold: false,
-    });
-
-    setSavingVehicle(false);
-
-    if (error) {
-      setMessage(error.message);
+    if (insertError || !insertedVehicle) {
+      setSavingVehicle(false);
+      setMessage(insertError?.message || "Vehicle could not be saved.");
       setMessageIsError(true);
       return;
     }
 
-    setAuctionUrl("");
-    setMessageIsError(false);
+    setMessage(
+      auctionAnalysis.images.length > 0
+        ? "Analyzing auction photos, repair risk and current market listings..."
+        : "Researching market value and repair risk. Auction photos were not available for vision analysis..."
+    );
 
-    if (analysis.analysisStatus === "limited") {
-      setMessage(
-        "Vehicle saved with limited auction data. Mileage, damage or images may require manual review."
+    try {
+      const marketAnalysis = await runMarketAnalysis(
+        insertedVehicle.id
       );
-    } else {
-      setMessage("Vehicle analyzed and saved successfully.");
-    }
 
-    await loadUserAndVehicles();
+      setAuctionUrl("");
+      setMessageIsError(false);
+
+      if (marketAnalysis.status === "limited") {
+        setMessage(
+          "Vehicle saved and AI analysis completed with limited evidence. Open Analysis to review warnings."
+        );
+      } else {
+        setMessage(
+          "Vehicle, repair risk, market value and recommended max bid were analyzed successfully."
+        );
+      }
+    } catch (error) {
+      setAuctionUrl("");
+      setMessageIsError(true);
+      setMessage(
+        `Vehicle was saved, but AI analysis could not finish: ${
+          error instanceof Error ? error.message : "Unknown error."
+        }`
+      );
+    } finally {
+      setSavingVehicle(false);
+      await loadUserAndVehicles();
+    }
   }
 
   function toggleVehicleSelection(vehicleId: string) {
@@ -1474,7 +1498,7 @@ export default function DashboardPage() {
               disabled={savingVehicle}
               className="rounded-lg bg-green-500 px-6 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {savingVehicle ? "Analyzing..." : "Analyze & Save"}
+              {savingVehicle ? "Running Full Analysis..." : "Analyze Vehicle"}
             </button>
           </div>
 

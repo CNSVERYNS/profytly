@@ -100,7 +100,15 @@ type MarketAnalysisRow = {
   market_value_high: number | null;
   market_value_estimate: number | null;
 
+  as_is_value_low: number | null;
+  as_is_value_high: number | null;
+  as_is_value_estimate: number | null;
+
   confidence_score: number | null;
+  vision_used: boolean | null;
+  image_count_analyzed: number | null;
+  visible_damage: string[] | null;
+  hidden_damage_risks: string[] | null;
 
   repair_risk: "low" | "medium" | "high" | "unknown" | null;
   risk_score: number | null;
@@ -275,7 +283,14 @@ export default function VehicleDetailPage() {
             "market_value_low",
             "market_value_high",
             "market_value_estimate",
+            "as_is_value_low",
+            "as_is_value_high",
+            "as_is_value_estimate",
             "confidence_score",
+            "vision_used",
+            "image_count_analyzed",
+            "visible_damage",
+            "hidden_damage_risks",
             "repair_risk",
             "risk_score",
             "repair_cost_low",
@@ -1144,9 +1159,9 @@ export default function VehicleDetailPage() {
               </div>
 
               <p className="mt-2 max-w-3xl text-zinc-400">
-                Search current US listings, estimate realistic resale
-                value, measure repair risk and calculate a data-backed
-                maximum bid.
+                Search current US listings, estimate repaired resale
+                value, inspect available auction photos, measure repair
+                risk and calculate a data-backed maximum bid.
               </p>
 
               {marketAnalysis && (
@@ -1170,8 +1185,8 @@ export default function VehicleDetailPage() {
               {runningMarketAnalysis
                 ? "Researching Market..."
                 : marketAnalysis
-                  ? "Run New AI Analysis"
-                  : "Run AI Market Analysis"}
+                  ? "Re-run Full Analysis"
+                  : "Run Full Analysis"}
             </button>
           </div>
 
@@ -1191,7 +1206,7 @@ export default function VehicleDetailPage() {
             <>
               <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <AiMetric
-                  label="AI Market Value"
+                  label="Repaired Resale Value"
                   value={money(
                     marketAnalysis.market_value_estimate
                   )}
@@ -1269,20 +1284,34 @@ export default function VehicleDetailPage() {
                 />
 
                 <AiMetric
-                  label="Comparable Listings"
-                  value={String(
-                    marketAnalysis.comparable_vehicles?.length ??
-                      0
+                  label="Estimated As-Is Value"
+                  value={money(
+                    marketAnalysis.as_is_value_estimate
                   )}
-                  note="Current public listings included by the analysis"
+                  note={
+                    marketAnalysis.as_is_value_low !== null &&
+                    marketAnalysis.as_is_value_high !== null
+                      ? `${money(
+                          marketAnalysis.as_is_value_low
+                        )} – ${money(
+                          marketAnalysis.as_is_value_high
+                        )} estimated range`
+                      : "Current-condition value unavailable"
+                  }
                 />
 
                 <AiMetric
-                  label="Research Sources"
-                  value={String(
-                    marketAnalysis.search_sources?.length ?? 0
-                  )}
-                  note="Unique public web sources reviewed"
+                  label="Vision Evidence"
+                  value={
+                    marketAnalysis.vision_used
+                      ? `${marketAnalysis.image_count_analyzed ?? 0} images`
+                      : "Not available"
+                  }
+                  note={
+                    marketAnalysis.vision_used
+                      ? "Auction photos were included in damage analysis"
+                      : "Repair estimate was not visually verified"
+                  }
                 />
               </div>
 
@@ -1309,6 +1338,26 @@ export default function VehicleDetailPage() {
                   title="AI Warnings"
                   items={marketAnalysis.warnings ?? []}
                   emptyText="No additional AI warnings."
+                  variant="warning"
+                />
+              </div>
+
+              <div className="mt-6 grid gap-6 lg:grid-cols-2">
+                <AnalysisList
+                  title="Visible Damage"
+                  items={marketAnalysis.visible_damage ?? []}
+                  emptyText={
+                    marketAnalysis.vision_used
+                      ? "No visible damage items were returned."
+                      : "Auction photos were not available for vision analysis."
+                  }
+                  variant="neutral"
+                />
+
+                <AnalysisList
+                  title="Hidden Damage Risks"
+                  items={marketAnalysis.hidden_damage_risks ?? []}
+                  emptyText="No additional hidden-damage risks were returned."
                   variant="warning"
                 />
               </div>
