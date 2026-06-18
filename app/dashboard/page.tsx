@@ -52,6 +52,9 @@ type Vehicle = {
 
   mileage: number | null;
   mileage_unit: string | null;
+  listing_mileage: number | null;
+  listing_mileage_unit: string | null;
+  listing_mileage_captured_at: string | null;
 
   primary_damage: string | null;
   secondary_damage: string | null;
@@ -446,6 +449,11 @@ export default function DashboardPage() {
           title_status: auctionAnalysis.titleStatus,
           mileage: auctionAnalysis.mileage?.value ?? null,
           mileage_unit: auctionAnalysis.mileage?.unit ?? null,
+          listing_mileage: auctionAnalysis.mileage?.value ?? null,
+          listing_mileage_unit: auctionAnalysis.mileage?.unit ?? null,
+          listing_mileage_captured_at: auctionAnalysis.mileage
+            ? auctionAnalysis.analyzedAt
+            : null,
           primary_damage: auctionAnalysis.primaryDamage,
           secondary_damage: auctionAnalysis.secondaryDamage,
           run_condition: auctionAnalysis.runCondition,

@@ -46,6 +46,9 @@ type Vehicle = {
 
   mileage: number | null;
   mileage_unit: string | null;
+  listing_mileage: number | null;
+  listing_mileage_unit: string | null;
+  listing_mileage_captured_at: string | null;
 
   primary_damage: string | null;
   secondary_damage: string | null;
@@ -205,6 +208,11 @@ export default function VehicleDetailPage() {
 
   const [mileageInput, setMileageInput] = useState("");
   const [mileageUnitInput, setMileageUnitInput] =
+    useState("miles");
+
+  const [listingMileageInput, setListingMileageInput] =
+    useState("");
+  const [listingMileageUnitInput, setListingMileageUnitInput] =
     useState("miles");
 
   const [primaryDamageInput, setPrimaryDamageInput] =
@@ -390,6 +398,17 @@ export default function VehicleDetailPage() {
       loadedVehicle.mileage_unit || "miles"
     );
 
+    setListingMileageInput(
+      loadedVehicle.listing_mileage !== null &&
+        loadedVehicle.listing_mileage !== undefined
+        ? String(loadedVehicle.listing_mileage)
+        : ""
+    );
+
+    setListingMileageUnitInput(
+      loadedVehicle.listing_mileage_unit || "miles"
+    );
+
     setPrimaryDamageInput(
       loadedVehicle.primary_damage ?? ""
     );
@@ -513,9 +532,17 @@ export default function VehicleDetailPage() {
     setSavingInfo(true);
 
     const mileage = numberOrNull(mileageInput);
+    const listingMileage = numberOrNull(listingMileageInput);
 
     if (mileage !== null && mileage < 0) {
       setInfoMessage("Mileage cannot be negative.");
+      setInfoMessageIsError(true);
+      setSavingInfo(false);
+      return;
+    }
+
+    if (listingMileage !== null && listingMileage < 0) {
+      setInfoMessage("Listing mileage cannot be negative.");
       setInfoMessageIsError(true);
       setSavingInfo(false);
       return;
@@ -557,6 +584,19 @@ export default function VehicleDetailPage() {
         mileage_unit:
           mileage !== null
             ? nullIfEmpty(mileageUnitInput) || "miles"
+            : null,
+
+        listing_mileage: listingMileage,
+
+        listing_mileage_unit:
+          listingMileage !== null
+            ? nullIfEmpty(listingMileageUnitInput) || "miles"
+            : null,
+
+        listing_mileage_captured_at:
+          listingMileage !== null
+            ? vehicle.listing_mileage_captured_at ||
+              new Date().toISOString()
             : null,
 
         primary_damage: nullIfEmpty(primaryDamageInput),
@@ -712,12 +752,24 @@ export default function VehicleDetailPage() {
         state_code:
           analysis.stateCode ?? vehicle.state_code,
 
+        listing_mileage:
+          analysis.mileage?.value ?? vehicle.listing_mileage,
+
+        listing_mileage_unit:
+          analysis.mileage?.unit ??
+          vehicle.listing_mileage_unit,
+
+        listing_mileage_captured_at:
+          analysis.mileage?.value !== undefined &&
+          analysis.mileage?.value !== null
+            ? analysis.analyzedAt
+            : vehicle.listing_mileage_captured_at,
+
         mileage:
-          analysis.mileage?.value ?? vehicle.mileage,
+          vehicle.mileage ?? analysis.mileage?.value ?? null,
 
         mileage_unit:
-          analysis.mileage?.unit ??
-          vehicle.mileage_unit,
+          vehicle.mileage_unit ?? analysis.mileage?.unit ?? null,
 
         primary_damage:
           analysis.primaryDamage ??
@@ -997,8 +1049,8 @@ export default function VehicleDetailPage() {
 
   const activeMileageMismatch = marketAnalysis
     ? mileageValuesMismatch(
-        vehicle.mileage,
-        vehicle.mileage_unit,
+        vehicle.listing_mileage,
+        vehicle.listing_mileage_unit,
         marketAnalysis.vision_detected_mileage,
         marketAnalysis.vision_detected_mileage_unit,
         Boolean(marketAnalysis.mileage_mismatch)
@@ -1433,15 +1485,27 @@ export default function VehicleDetailPage() {
                 />
 
                 <AiMetric
-                  label="Saved Mileage"
+                  label="Listing Mileage"
                   value={
-                    vehicle.mileage !== null
-                      ? `${Number(vehicle.mileage).toLocaleString()} ${
-                          vehicle.mileage_unit || "miles"
+                    vehicle.listing_mileage !== null
+                      ? `${Number(
+                          vehicle.listing_mileage
+                        ).toLocaleString()} ${
+                          vehicle.listing_mileage_unit || "miles"
                         }`
-                      : "Not available"
+                      : "Not captured"
                   }
-                  note="Mileage currently saved on the vehicle"
+                  note={
+                    vehicle.listing_mileage !== null
+                      ? "Mileage captured from the auction listing"
+                      : vehicle.mileage !== null
+                        ? `Working mileage saved separately: ${Number(
+                            vehicle.mileage
+                          ).toLocaleString()} ${
+                            vehicle.mileage_unit || "miles"
+                          }`
+                        : "Auction-listing mileage is not available"
+                  }
                 />
 
                 <div
@@ -1470,13 +1534,17 @@ export default function VehicleDetailPage() {
                         : "text-zinc-500"
                     }`}
                   >
-                    {activeMileageMismatch
-                      ? "Mileage differs from the saved vehicle value."
-                      : "No material mileage mismatch detected."}
+                    {marketAnalysis.vision_detected_mileage === null
+                      ? "The odometer could not be read confidently."
+                      : vehicle.listing_mileage === null
+                        ? "No auction-listing mileage is available for comparison."
+                        : activeMileageMismatch
+                          ? "Vision mileage differs from the auction-listing mileage."
+                          : "Vision mileage matches the listing within tolerance."}
                   </p>
 
                   {marketAnalysis.vision_detected_mileage !== null &&
-                    activeMileageMismatch && (
+                    (activeMileageMismatch || vehicle.mileage === null) && (
                       <button
                         type="button"
                         onClick={useDetectedMileage}
@@ -1485,7 +1553,9 @@ export default function VehicleDetailPage() {
                       >
                         {savingDetectedMileage
                           ? "Saving..."
-                          : "Use Detected Mileage"}
+                          : vehicle.mileage === null
+                            ? "Use Vision Mileage as Working Mileage"
+                            : "Use Vision Mileage"}
                       </button>
                     )}
                 </div>
@@ -1803,14 +1873,32 @@ export default function VehicleDetailPage() {
             />
 
             <NumberField
-              label="Mileage"
+              label="Listing Mileage"
+              value={listingMileageInput}
+              onChange={setListingMileageInput}
+              showCurrency={false}
+            />
+
+            <SelectField
+              label="Listing Mileage Unit"
+              value={listingMileageUnitInput}
+              onChange={setListingMileageUnitInput}
+              options={[
+                { value: "miles", label: "Miles" },
+                { value: "km", label: "Kilometers" },
+                { value: "unknown", label: "Unknown" },
+              ]}
+            />
+
+            <NumberField
+              label="Working Mileage"
               value={mileageInput}
               onChange={setMileageInput}
               showCurrency={false}
             />
 
             <SelectField
-              label="Mileage Unit"
+              label="Working Mileage Unit"
               value={mileageUnitInput}
               onChange={setMileageUnitInput}
               options={[
@@ -2221,20 +2309,22 @@ function formatRepairRisk(
 }
 
 function mileageValuesMismatch(
-  savedMileage: number | null,
-  savedUnit: string | null,
+  listingMileage: number | null,
+  listingUnit: string | null,
   detectedMileage: number | null,
   detectedUnit: string | null,
   fallback: boolean
 ) {
-  if (savedMileage === null || detectedMileage === null) {
-    return fallback;
+  if (listingMileage === null || detectedMileage === null) {
+    return false;
   }
 
   const savedMiles =
-    savedUnit?.toLowerCase() === "km"
-      ? savedMileage * 0.621371
-      : savedMileage;
+    listingUnit?.toLowerCase() === "km"
+      ? listingMileage * 0.621371
+      : listingMileage;
+
+  void fallback;
 
   const detectedMiles =
     detectedUnit?.toLowerCase() === "km"

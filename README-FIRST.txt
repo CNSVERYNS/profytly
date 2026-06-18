@@ -1,18 +1,16 @@
-PROFYTLY VISION CALIBRATION UPGRADE
+Profytly Listing Mileage Upgrade
 
-This upgrade:
-- removes the duplicate Vision/Full Analysis buttons
-- keeps one Run Full AI Analysis button
-- separates visible repair cost from hidden-damage contingency
-- calculates a combined recommended repair budget
-- calibrates repair pricing for independent-shop / flipper economics
-- stores mileage detected from auction photos
-- shows mileage mismatch and lets the user accept detected mileage
-
-1) Run the SQL in supabase-vision-calibration.sql.
-2) Extract this archive in the Profytly project root.
-3) Run:
+1. Run supabase-listing-mileage.sql in Supabase SQL Editor.
+2. Extract this archive into the Profytly project root.
+3. Run:
    npx tsc --noEmit
    npm run build
    npm run dev
-4) Upload photos and click Run Full AI Analysis.
+
+Changes:
+- Separates auction-listing mileage from working mileage.
+- Compares Vision mileage only with listing mileage.
+- Shows an honest message when listing mileage was not captured.
+- Allows Vision mileage to be accepted as working mileage when needed.
+- Saves analyzer mileage into both listing and working mileage for newly added vehicles.
+- Preserves manually accepted working mileage during auction re-analysis.

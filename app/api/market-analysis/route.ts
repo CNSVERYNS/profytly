@@ -26,6 +26,9 @@ type VehicleRow = {
   title_status: string | null;
   mileage: number | string | null;
   mileage_unit: string | null;
+  listing_mileage: number | string | null;
+  listing_mileage_unit: string | null;
+  listing_mileage_captured_at: string | null;
   primary_damage: string | null;
   secondary_damage: string | null;
   run_condition: string | null;
@@ -329,8 +332,10 @@ export async function POST(request: NextRequest) {
       year: vehicle.vehicle_year,
       make: vehicle.vehicle_make,
       model: vehicle.vehicle_model,
-      mileage: nullableNumber(vehicle.mileage),
-      mileage_unit: vehicle.mileage_unit,
+      listing_mileage: nullableNumber(vehicle.listing_mileage),
+      listing_mileage_unit: vehicle.listing_mileage_unit,
+      working_mileage: nullableNumber(vehicle.mileage),
+      working_mileage_unit: vehicle.mileage_unit,
       title_status: vehicle.title_status,
       primary_damage: vehicle.primary_damage,
       secondary_damage: vehicle.secondary_damage,
@@ -559,8 +564,8 @@ export async function POST(request: NextRequest) {
     ? normalizeMileageUnit(aiOutput.detected_mileage_unit)
     : null;
   const mileageMismatch = calculateMileageMismatch(
-    nullableNumber(vehicle.mileage),
-    vehicle.mileage_unit,
+    nullableNumber(vehicle.listing_mileage),
+    vehicle.listing_mileage_unit,
     detectedMileage,
     detectedMileageUnit
   );
@@ -635,7 +640,7 @@ export async function POST(request: NextRequest) {
   }
   if (mileageMismatch && detectedMileage !== null) {
     warnings.unshift(
-      `Vision detected ${detectedMileage.toLocaleString()} ${detectedMileageUnit || "miles"}, which does not match the saved mileage. Verify the odometer before bidding.`
+      `Vision detected ${detectedMileage.toLocaleString()} ${detectedMileageUnit || "miles"}, which does not match the auction-listing mileage. Verify the odometer before bidding.`
     );
   }
   if (finalStatus === "limited" && !containsLimitedWarning(warnings)) {
@@ -854,6 +859,7 @@ DAMAGE, VISION AND ODOMETER RULES:
 - Vision images supplied: ${visionUsed ? "yes" : "no"}.
 - If images are supplied, inspect only what is actually visible. Identify damaged exterior/interior parts, deployed airbags, wheel-angle or suspension clues, cooling-pack exposure, broken glass, missing parts, flood/fire clues and panel gaps.
 - Read the odometer only when it is clearly visible. Return detected_mileage and detected_mileage_unit; otherwise return null.
+- Compare detected mileage against vehicle.listing_mileage when it is available. The working mileage may be manually entered or vision-accepted and must not be treated as verified auction-listing mileage.
 - Do not claim hidden structural, drivetrain or mechanical damage is confirmed from photographs.
 - Put possible unseen problems in hidden_damage_risks, not visible_damage.
 - If no images are supplied, vision_confidence_score must be 0, detected_mileage must be null and visible_damage must be empty. Explain that the repair estimate is not visually verified.
