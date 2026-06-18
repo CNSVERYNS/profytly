@@ -1,23 +1,52 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 
+import AppNav from "@/components/AppNav";
+import { supabase } from "@/lib/supabase";
+
+import {
+  analyzeVehicleUrl,
+  type AuctionAnalysis,
+} from "@/lib/analyze-vehicle-client";
+
+type AnalysisStatus = "success" | "limited" | "pending";
+
 type Vehicle = {
   id: string;
+  user_id: string;
+
   auction_url: string;
   image_url: string | null;
+  auction_images: string[] | null;
+
   source: string | null;
   lot_number: string | null;
   title: string | null;
+
   vehicle_year: string | null;
   vehicle_make: string | null;
   vehicle_model: string | null;
+
   location: string | null;
   state_code: string | null;
   title_status: string | null;
+
+  analysis_status: AnalysisStatus | null;
+  analysis_warnings: string[] | null;
+  analyzed_at: string | null;
+
+  auction_page_title: string | null;
+  auction_description: string | null;
+
+  mileage: number | null;
+  mileage_unit: string | null;
+
+  primary_damage: string | null;
+  secondary_damage: string | null;
+  run_condition: string | null;
 
   profyt_score: number | null;
   recommended_bid: number | null;
@@ -28,14 +57,20 @@ type Vehicle = {
   estimated_fees: number | null;
   estimated_transport: number | null;
   estimated_repairs: number | null;
+
   desired_profit: number | null;
   target_profit: number | null;
+
+  is_won: boolean;
+  is_sold: boolean;
 
   created_at: string;
 };
 
 type Note = {
   id: string;
+  user_id: string;
+  vehicle_id: string;
   content: string;
   created_at: string;
 };
@@ -43,16 +78,40 @@ type Note = {
 export default function VehicleDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const vehicleId = params.id as string;
+
+  const rawVehicleId = params.id;
+  const vehicleId = Array.isArray(rawVehicleId)
+    ? rawVehicleId[0]
+    : rawVehicleId;
 
   const [userId, setUserId] = useState("");
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
-  const [noteText, setNoteText] = useState("");
 
-  const [message, setMessage] = useState("");
-  const [numbersMessage, setNumbersMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [savingInfo, setSavingInfo] = useState(false);
+  const [savingNumbers, setSavingNumbers] = useState(false);
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [addingNote, setAddingNote] = useState(false);
+  const [deletingVehicle, setDeletingVehicle] = useState(false);
+
+  const [pageMessage, setPageMessage] = useState("");
+  const [pageMessageIsError, setPageMessageIsError] =
+    useState(false);
+
   const [infoMessage, setInfoMessage] = useState("");
+  const [infoMessageIsError, setInfoMessageIsError] =
+    useState(false);
+
+  const [numbersMessage, setNumbersMessage] = useState("");
+  const [numbersMessageIsError, setNumbersMessageIsError] =
+    useState(false);
+
+  const [noteMessage, setNoteMessage] = useState("");
+  const [noteMessageIsError, setNoteMessageIsError] =
+    useState(false);
+
+  const [noteText, setNoteText] = useState("");
 
   const [titleInput, setTitleInput] = useState("");
   const [titleStatusInput, setTitleStatusInput] = useState("");
@@ -62,234 +121,812 @@ export default function VehicleDetailPage() {
   const [lotNumberInput, setLotNumberInput] = useState("");
   const [imageUrlInput, setImageUrlInput] = useState("");
 
+  const [mileageInput, setMileageInput] = useState("");
+  const [mileageUnitInput, setMileageUnitInput] =
+    useState("miles");
+
+  const [primaryDamageInput, setPrimaryDamageInput] =
+    useState("");
+
+  const [secondaryDamageInput, setSecondaryDamageInput] =
+    useState("");
+
+  const [runConditionInput, setRunConditionInput] = useState("");
+
   const [retailPriceInput, setRetailPriceInput] = useState("");
-  const [desiredProfitInput, setDesiredProfitInput] = useState("");
+  const [desiredProfitInput, setDesiredProfitInput] =
+    useState("");
+
   const [repairsInput, setRepairsInput] = useState("");
   const [transportInput, setTransportInput] = useState("");
   const [feesInput, setFeesInput] = useState("");
 
   useEffect(() => {
-    loadPage();
-  }, []);
+    if (vehicleId) {
+      loadPage();
+    }
+  }, [vehicleId]);
+
+  const galleryImages = useMemo(() => {
+    if (!vehicle) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        [
+          vehicle.image_url,
+          ...(vehicle.auction_images ?? []),
+        ].filter(
+          (image): image is string =>
+            typeof image === "string" && image.trim().length > 0
+        )
+      )
+    );
+  }, [vehicle]);
 
   async function loadPage() {
-    const { data } = await supabase.auth.getUser();
+    if (!vehicleId) {
+      setPageMessage("Vehicle ID is missing.");
+      setPageMessageIsError(true);
+      setLoading(false);
+      return;
+    }
 
-    if (!data.user) {
+    setLoading(true);
+    setPageMessage("");
+    setPageMessageIsError(false);
+
+    const { data: authData, error: authError } =
+      await supabase.auth.getUser();
+
+    if (authError || !authData.user) {
       router.push("/login");
       return;
     }
 
-    setUserId(data.user.id);
+    setUserId(authData.user.id);
 
-    const { data: vehicleData } = await supabase
-      .from("vehicles")
-      .select("*")
-      .eq("id", vehicleId)
-      .single();
+    const [vehicleResponse, notesResponse] = await Promise.all([
+      supabase
+        .from("vehicles")
+        .select("*")
+        .eq("id", vehicleId)
+        .eq("user_id", authData.user.id)
+        .maybeSingle(),
 
-    if (vehicleData) {
-      setVehicle(vehicleData);
+      supabase
+        .from("vehicle_notes")
+        .select("*")
+        .eq("vehicle_id", vehicleId)
+        .eq("user_id", authData.user.id)
+        .order("created_at", { ascending: false }),
+    ]);
 
-      setTitleInput(vehicleData.title ?? "");
-      setTitleStatusInput(vehicleData.title_status ?? "");
-      setLocationInput(vehicleData.location ?? "");
-      setStateCodeInput(vehicleData.state_code ?? "");
-      setSourceInput(vehicleData.source ?? "");
-      setLotNumberInput(vehicleData.lot_number ?? "");
-      setImageUrlInput(vehicleData.image_url ?? "");
-
-      setRetailPriceInput(String(vehicleData.retail_price ?? vehicleData.market_value ?? 0));
-      setDesiredProfitInput(String(vehicleData.desired_profit ?? vehicleData.target_profit ?? 0));
-      setRepairsInput(String(vehicleData.estimated_repairs ?? 0));
-      setTransportInput(String(vehicleData.estimated_transport ?? 0));
-      setFeesInput(String(vehicleData.estimated_fees ?? 0));
+    if (vehicleResponse.error) {
+      setPageMessage(vehicleResponse.error.message);
+      setPageMessageIsError(true);
+      setLoading(false);
+      return;
     }
 
-    const { data: noteData } = await supabase
-      .from("vehicle_notes")
-      .select("*")
-      .eq("vehicle_id", vehicleId)
-      .order("created_at", { ascending: false });
+    if (!vehicleResponse.data) {
+      setPageMessage("Vehicle could not be found.");
+      setPageMessageIsError(true);
+      setLoading(false);
+      return;
+    }
 
-    setNotes(noteData || []);
+    if (notesResponse.error) {
+      setPageMessage(notesResponse.error.message);
+      setPageMessageIsError(true);
+    }
+
+    const loadedVehicle = vehicleResponse.data as Vehicle;
+
+    setVehicle(loadedVehicle);
+    setNotes((notesResponse.data || []) as Note[]);
+
+    setTitleInput(loadedVehicle.title ?? "");
+    setTitleStatusInput(loadedVehicle.title_status ?? "");
+    setLocationInput(loadedVehicle.location ?? "");
+    setStateCodeInput(loadedVehicle.state_code ?? "");
+    setSourceInput(loadedVehicle.source ?? "");
+    setLotNumberInput(loadedVehicle.lot_number ?? "");
+    setImageUrlInput(loadedVehicle.image_url ?? "");
+
+    setMileageInput(
+      loadedVehicle.mileage !== null &&
+        loadedVehicle.mileage !== undefined
+        ? String(loadedVehicle.mileage)
+        : ""
+    );
+
+    setMileageUnitInput(
+      loadedVehicle.mileage_unit || "miles"
+    );
+
+    setPrimaryDamageInput(
+      loadedVehicle.primary_damage ?? ""
+    );
+
+    setSecondaryDamageInput(
+      loadedVehicle.secondary_damage ?? ""
+    );
+
+    setRunConditionInput(
+      loadedVehicle.run_condition ?? ""
+    );
+
+    const retailValue =
+      loadedVehicle.retail_price ??
+      loadedVehicle.market_value ??
+      null;
+
+    setRetailPriceInput(
+      retailValue !== null ? String(retailValue) : ""
+    );
+
+    const profitValue =
+      loadedVehicle.desired_profit ??
+      loadedVehicle.target_profit ??
+      null;
+
+    setDesiredProfitInput(
+      profitValue !== null ? String(profitValue) : ""
+    );
+
+    setRepairsInput(
+      loadedVehicle.estimated_repairs !== null
+        ? String(loadedVehicle.estimated_repairs)
+        : ""
+    );
+
+    setTransportInput(
+      loadedVehicle.estimated_transport !== null
+        ? String(loadedVehicle.estimated_transport)
+        : ""
+    );
+
+    setFeesInput(
+      loadedVehicle.estimated_fees !== null
+        ? String(loadedVehicle.estimated_fees)
+        : ""
+    );
+
+    setLoading(false);
   }
 
   function toNumber(value: string) {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : 0;
+    const parsed = Number(value);
+
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function numberOrNull(value: string) {
+    const cleaned = value.trim();
+
+    if (!cleaned) {
+      return null;
+    }
+
+    const parsed = Number(cleaned);
+
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   function nullIfEmpty(value: string) {
     const cleaned = value.trim();
+
     return cleaned.length > 0 ? cleaned : null;
   }
 
-  function calculateRecommendedBid() {
-    const retailPrice = toNumber(retailPriceInput);
+  function money(value: number | null | undefined) {
+    if (value === null || value === undefined) {
+      return "-";
+    }
+
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed)) {
+      return "-";
+    }
+
+    return `$${parsed.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+
+  function calculateRecommendedBid(): number | null {
+    const retailPrice = numberOrNull(retailPriceInput);
+
+    if (retailPrice === null) {
+      return null;
+    }
+
     const desiredProfit = toNumber(desiredProfitInput);
     const repairs = toNumber(repairsInput);
     const transport = toNumber(transportInput);
     const fees = toNumber(feesInput);
 
-    return retailPrice - desiredProfit - repairs - transport - fees;
+    return (
+      retailPrice -
+      desiredProfit -
+      repairs -
+      transport -
+      fees
+    );
   }
 
   async function saveVehicleInfo() {
+    if (!vehicle || !userId) {
+      return;
+    }
+
     setInfoMessage("");
+    setInfoMessageIsError(false);
+    setSavingInfo(true);
+
+    const mileage = numberOrNull(mileageInput);
+
+    if (mileage !== null && mileage < 0) {
+      setInfoMessage("Mileage cannot be negative.");
+      setInfoMessageIsError(true);
+      setSavingInfo(false);
+      return;
+    }
+
+    const stateCode = nullIfEmpty(stateCodeInput);
+
+    if (stateCode && stateCode.length !== 2) {
+      setInfoMessage(
+        "State must use a two-letter code, for example MD."
+      );
+
+      setInfoMessageIsError(true);
+      setSavingInfo(false);
+      return;
+    }
 
     const { error } = await supabase
       .from("vehicles")
       .update({
         title: nullIfEmpty(titleInput) || "Saved Vehicle",
+
         title_status: nullIfEmpty(titleStatusInput),
+
         location: nullIfEmpty(locationInput),
-        state_code: nullIfEmpty(stateCodeInput)?.toUpperCase() || null,
-        source: nullIfEmpty(sourceInput),
+
+        state_code: stateCode
+          ? stateCode.toUpperCase()
+          : null,
+
+        source: nullIfEmpty(sourceInput)?.toLowerCase() ?? null,
+
         lot_number: nullIfEmpty(lotNumberInput),
+
         image_url: nullIfEmpty(imageUrlInput),
+
+        mileage,
+
+        mileage_unit:
+          mileage !== null
+            ? nullIfEmpty(mileageUnitInput) || "miles"
+            : null,
+
+        primary_damage: nullIfEmpty(primaryDamageInput),
+
+        secondary_damage: nullIfEmpty(
+          secondaryDamageInput
+        ),
+
+        run_condition: nullIfEmpty(runConditionInput),
       })
-      .eq("id", vehicleId);
+      .eq("id", vehicleId)
+      .eq("user_id", userId);
+
+    setSavingInfo(false);
 
     if (error) {
       setInfoMessage(error.message);
+      setInfoMessageIsError(true);
       return;
     }
 
-    setInfoMessage("Vehicle info saved.");
-    loadPage();
+    setInfoMessage("Vehicle and auction data saved.");
+    await loadPage();
   }
 
   async function saveNumbers() {
+    if (!vehicle || !userId) {
+      return;
+    }
+
     setNumbersMessage("");
+    setNumbersMessageIsError(false);
+
+    const retailPrice = numberOrNull(retailPriceInput);
+    const desiredProfit = toNumber(desiredProfitInput);
+    const repairs = toNumber(repairsInput);
+    const transport = toNumber(transportInput);
+    const fees = toNumber(feesInput);
+
+    const valuesToValidate = [
+      retailPrice,
+      desiredProfit,
+      repairs,
+      transport,
+      fees,
+    ];
+
+    if (
+      valuesToValidate.some(
+        (value) => value !== null && value < 0
+      )
+    ) {
+      setNumbersMessage(
+        "Financial values cannot be negative."
+      );
+
+      setNumbersMessageIsError(true);
+      return;
+    }
 
     const recommendedBid = calculateRecommendedBid();
+
+    setSavingNumbers(true);
 
     const { error } = await supabase
       .from("vehicles")
       .update({
-        retail_price: toNumber(retailPriceInput),
-        market_value: toNumber(retailPriceInput),
-        desired_profit: toNumber(desiredProfitInput),
-        target_profit: toNumber(desiredProfitInput),
-        estimated_repairs: toNumber(repairsInput),
-        estimated_transport: toNumber(transportInput),
-        estimated_fees: toNumber(feesInput),
+        retail_price: retailPrice,
+        market_value: retailPrice,
+
+        desired_profit: desiredProfit,
+        target_profit: desiredProfit,
+
+        estimated_repairs: repairs,
+        estimated_transport: transport,
+        estimated_fees: fees,
+
         recommended_bid: recommendedBid,
       })
-      .eq("id", vehicleId);
+      .eq("id", vehicleId)
+      .eq("user_id", userId);
+
+    setSavingNumbers(false);
 
     if (error) {
       setNumbersMessage(error.message);
+      setNumbersMessageIsError(true);
       return;
     }
 
-    setNumbersMessage("Numbers saved.");
-    loadPage();
+    setNumbersMessage("Profit assumptions saved.");
+    await loadPage();
+  }
+
+  async function reanalyzeVehicle() {
+    if (!vehicle || !userId) {
+      return;
+    }
+
+    setPageMessage("");
+    setPageMessageIsError(false);
+    setReanalyzing(true);
+
+    let analysis: AuctionAnalysis;
+
+    try {
+      analysis = await analyzeVehicleUrl(
+        vehicle.auction_url
+      );
+    } catch (error) {
+      setReanalyzing(false);
+      setPageMessageIsError(true);
+
+      setPageMessage(
+        error instanceof Error
+          ? error.message
+          : "The vehicle could not be re-analyzed."
+      );
+
+      return;
+    }
+
+    const currentImages = vehicle.auction_images ?? [];
+
+    const newImages =
+      analysis.images.length > 0
+        ? analysis.images
+        : currentImages;
+
+    const { error } = await supabase
+      .from("vehicles")
+      .update({
+        title: analysis.title || vehicle.title,
+
+        source: analysis.source || vehicle.source,
+        lot_number:
+          analysis.lotNumber ?? vehicle.lot_number,
+
+        vehicle_year:
+          analysis.vehicleYear ?? vehicle.vehicle_year,
+
+        vehicle_make:
+          analysis.vehicleMake ?? vehicle.vehicle_make,
+
+        vehicle_model:
+          analysis.vehicleModel ?? vehicle.vehicle_model,
+
+        title_status:
+          analysis.titleStatus ?? vehicle.title_status,
+
+        location:
+          analysis.location ?? vehicle.location,
+
+        state_code:
+          analysis.stateCode ?? vehicle.state_code,
+
+        mileage:
+          analysis.mileage?.value ?? vehicle.mileage,
+
+        mileage_unit:
+          analysis.mileage?.unit ??
+          vehicle.mileage_unit,
+
+        primary_damage:
+          analysis.primaryDamage ??
+          vehicle.primary_damage,
+
+        secondary_damage:
+          analysis.secondaryDamage ??
+          vehicle.secondary_damage,
+
+        run_condition:
+          analysis.runCondition ??
+          vehicle.run_condition,
+
+        image_url:
+          analysis.imageUrl ?? vehicle.image_url,
+
+        auction_images: newImages,
+
+        analysis_status: analysis.analysisStatus,
+        analysis_warnings: analysis.warnings,
+
+        auction_page_title: analysis.pageTitle,
+
+        auction_description: analysis.description,
+
+        analyzed_at: analysis.analyzedAt,
+      })
+      .eq("id", vehicleId)
+      .eq("user_id", userId);
+
+    setReanalyzing(false);
+
+    if (error) {
+      setPageMessage(error.message);
+      setPageMessageIsError(true);
+      return;
+    }
+
+    if (analysis.analysisStatus === "limited") {
+      setPageMessage(
+        "Vehicle re-analyzed with limited auction data."
+      );
+    } else {
+      setPageMessage(
+        "Auction data refreshed successfully."
+      );
+    }
+
+    await loadPage();
   }
 
   async function addNote() {
-    setMessage("");
+    setNoteMessage("");
+    setNoteMessageIsError(false);
 
     if (!noteText.trim()) {
-      setMessage("Note cannot be empty.");
+      setNoteMessage("Note cannot be empty.");
+      setNoteMessageIsError(true);
       return;
     }
 
-    const { error } = await supabase.from("vehicle_notes").insert({
-      vehicle_id: vehicleId,
-      user_id: userId,
-      content: noteText.trim(),
-    });
+    if (!userId) {
+      setNoteMessage("User account could not be loaded.");
+      setNoteMessageIsError(true);
+      return;
+    }
+
+    setAddingNote(true);
+
+    const { error } = await supabase
+      .from("vehicle_notes")
+      .insert({
+        vehicle_id: vehicleId,
+        user_id: userId,
+        content: noteText.trim(),
+      });
+
+    setAddingNote(false);
 
     if (error) {
-      setMessage(error.message);
+      setNoteMessage(error.message);
+      setNoteMessageIsError(true);
       return;
     }
 
     setNoteText("");
-    setMessage("Note added.");
-    loadPage();
+    setNoteMessage("Note added.");
+
+    await loadPage();
+  }
+
+  async function deleteNote(noteId: string) {
+    if (!userId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Delete this note?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from("vehicle_notes")
+      .delete()
+      .eq("id", noteId)
+      .eq("vehicle_id", vehicleId)
+      .eq("user_id", userId);
+
+    if (error) {
+      setNoteMessage(error.message);
+      setNoteMessageIsError(true);
+      return;
+    }
+
+    setNoteMessage("Note deleted.");
+    setNoteMessageIsError(false);
+
+    await loadPage();
   }
 
   async function deleteVehicle() {
-    const confirmed = confirm("Delete this vehicle from your watchlist?");
-    if (!confirmed) return;
+    if (!vehicle || !userId) {
+      return;
+    }
 
-    await supabase.from("vehicles").delete().eq("id", vehicleId);
+    if (vehicle.is_won || vehicle.is_sold) {
+      setPageMessage(
+        "Owned or sold vehicles cannot be deleted from the watchlist detail page."
+      );
+
+      setPageMessageIsError(true);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${
+        vehicle.title || "this vehicle"
+      } from your watchlist?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingVehicle(true);
+
+    const { error } = await supabase
+      .from("vehicles")
+      .delete()
+      .eq("id", vehicleId)
+      .eq("user_id", userId)
+      .eq("is_won", false);
+
+    setDeletingVehicle(false);
+
+    if (error) {
+      setPageMessage(error.message);
+      setPageMessageIsError(true);
+      return;
+    }
+
     router.push("/dashboard");
+    router.refresh();
   }
 
-  function money(value: number | null | undefined) {
-    if (value === null || value === undefined) return "-";
-    return `$${Number(value).toLocaleString()}`;
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-zinc-950 p-6 text-white">
+        Loading vehicle analysis...
+      </main>
+    );
   }
 
   if (!vehicle) {
     return (
-      <main className="min-h-screen bg-zinc-950 p-6 text-white">
-        Loading...
+      <main className="min-h-screen bg-zinc-950 text-white">
+        <AppNav />
+
+        <section className="mx-auto max-w-6xl px-6 py-10">
+          <StatusMessage
+            message={
+              pageMessage || "Vehicle could not be found."
+            }
+            isError
+          />
+
+          <Link
+            href="/dashboard"
+            className="mt-6 inline-block rounded-lg border border-zinc-700 px-5 py-3"
+          >
+            Back to Watchlist
+          </Link>
+        </section>
       </main>
     );
   }
 
   const calculatedBid = calculateRecommendedBid();
 
+  const backHref = vehicle.is_sold
+    ? "/sold"
+    : vehicle.is_won
+      ? "/inventory"
+      : "/dashboard";
+
+  const backLabel = vehicle.is_sold
+    ? "Back to Sold Vehicles"
+    : vehicle.is_won
+      ? "Back to Inventory"
+      : "Back to Watchlist";
+
+  const recordStatus = vehicle.is_sold
+    ? "Sold Vehicle"
+    : vehicle.is_won
+      ? "Current Inventory"
+      : "Auction Watchlist";
+
   return (
     <main className="min-h-screen bg-zinc-950 text-white">
-      <nav className="flex items-center justify-between border-b border-zinc-800 px-6 py-5">
-        <Link href="/dashboard" className="text-2xl font-bold">
-          Profyt<span className="text-green-500">ly</span>
-        </Link>
+      <AppNav />
 
-        <Link
-          href="/dashboard"
-          className="rounded-lg border border-zinc-700 px-4 py-2 text-sm"
-        >
-          Back to Dashboard
-        </Link>
-      </nav>
-
-      <section className="mx-auto max-w-6xl px-6 py-10">
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-            <div className="text-sm uppercase text-zinc-500">
-              {vehicle.source || "Auction"} Vehicle
-            </div>
+      <section className="mx-auto max-w-7xl px-6 py-10">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-wider text-green-500">
+              Vehicle Analysis
+            </p>
 
             <h1 className="mt-3 text-4xl font-bold">
               {vehicle.title || "Saved Vehicle"}
             </h1>
+          </div>
 
-            <div className="mt-4 text-zinc-400">
-              {vehicle.title_status && <p>{vehicle.title_status}</p>}
+          <Link
+            href={backHref}
+            className="w-fit rounded-lg border border-zinc-700 px-4 py-2 text-sm hover:border-zinc-500"
+          >
+            {backLabel}
+          </Link>
+        </div>
 
+        {pageMessage && (
+          <div className="mt-6">
+            <StatusMessage
+              message={pageMessage}
+              isError={pageMessageIsError}
+            />
+          </div>
+        )}
+
+        <div className="mt-8 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge
+                label={recordStatus}
+                variant="neutral"
+              />
+
+              {vehicle.title_status && (
+                <StatusBadge
+                  label={vehicle.title_status}
+                  variant="green"
+                />
+              )}
+
+              {vehicle.analysis_status === "success" && (
+                <StatusBadge
+                  label="Auction Data Captured"
+                  variant="blue"
+                />
+              )}
+
+              {vehicle.analysis_status === "limited" && (
+                <StatusBadge
+                  label="Limited Data"
+                  variant="amber"
+                />
+              )}
+
+              {!vehicle.analysis_status && (
+                <StatusBadge
+                  label="Analysis Pending"
+                  variant="neutral"
+                />
+              )}
+            </div>
+
+            <div className="mt-6 space-y-2 text-zinc-400">
               {vehicle.location && (
                 <p>
                   {vehicle.location}
-                  {vehicle.state_code ? `, ${vehicle.state_code}` : ""}
+                  {vehicle.state_code
+                    ? `, ${vehicle.state_code}`
+                    : ""}
                 </p>
               )}
 
-              {vehicle.lot_number && <p>Lot #{vehicle.lot_number}</p>}
-              <p>Source: {vehicle.source || "unknown"}</p>
+              {vehicle.lot_number && (
+                <p>Lot #{vehicle.lot_number}</p>
+              )}
+
+              <p>
+                Source:{" "}
+                <span className="capitalize">
+                  {vehicle.source || "unknown"}
+                </span>
+              </p>
+
+              <p>
+                Last analyzed:{" "}
+                {vehicle.analyzed_at
+                  ? new Date(
+                      vehicle.analyzed_at
+                    ).toLocaleString()
+                  : "Not analyzed"}
+              </p>
             </div>
 
             <div className="mt-6 flex flex-wrap gap-3">
               <a
                 href={vehicle.auction_url}
                 target="_blank"
-                className="inline-block rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
+                rel="noreferrer"
+                className="rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
               >
                 Open Auction Link
               </a>
 
               <button
-                onClick={deleteVehicle}
-                className="rounded-lg border border-red-800 px-5 py-3 text-red-400"
+                onClick={reanalyzeVehicle}
+                disabled={reanalyzing}
+                className="rounded-lg border border-zinc-700 px-5 py-3 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Delete Vehicle
+                {reanalyzing
+                  ? "Analyzing..."
+                  : "Re-analyze Auction Data"}
               </button>
+
+              {!vehicle.is_won && !vehicle.is_sold && (
+                <button
+                  onClick={deleteVehicle}
+                  disabled={deletingVehicle}
+                  className="rounded-lg border border-red-900 px-5 py-3 text-red-400 disabled:opacity-60"
+                >
+                  {deletingVehicle
+                    ? "Deleting..."
+                    : "Delete Vehicle"}
+                </button>
+              )}
             </div>
           </div>
 
@@ -298,35 +935,95 @@ export default function VehicleDetailPage() {
               <img
                 src={vehicle.image_url}
                 alt={vehicle.title || "Vehicle image"}
-                className="h-full min-h-72 w-full object-cover"
+                className="h-full min-h-80 w-full object-cover"
               />
             ) : (
-              <div className="flex min-h-72 items-center justify-center p-6 text-center text-zinc-500">
-                No vehicle image yet.
+              <div className="flex min-h-80 items-center justify-center p-6 text-center text-zinc-500">
+                No auction image is currently available.
                 <br />
-                Add an image URL below.
+                Add an image URL or re-analyze the vehicle.
               </div>
             )}
           </div>
         </div>
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-4">
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-            <div className="text-sm text-zinc-400">Profyt Score</div>
+        {vehicle.analysis_warnings &&
+          vehicle.analysis_warnings.length > 0 && (
+            <div className="mt-6 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-6">
+              <h2 className="font-bold text-amber-400">
+                Manual Review Required
+              </h2>
 
-            <div className="mt-4 text-5xl font-bold">
-              {vehicle.profyt_score ?? "-"}
-              <span className="text-lg text-zinc-500">/100</span>
+              <div className="mt-3 space-y-2 text-sm text-amber-300/80">
+                {vehicle.analysis_warnings.map(
+                  (warning, index) => (
+                    <p key={`${warning}-${index}`}>
+                      • {warning}
+                    </p>
+                  )
+                )}
+              </div>
+            </div>
+          )}
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Metric
+            label="Mileage"
+            value={
+              vehicle.mileage !== null
+                ? `${Number(
+                    vehicle.mileage
+                  ).toLocaleString()} ${
+                    vehicle.mileage_unit || ""
+                  }`
+                : "Not available"
+            }
+          />
+
+          <Metric
+            label="Primary Damage"
+            value={
+              vehicle.primary_damage || "Not available"
+            }
+          />
+
+          <Metric
+            label="Secondary Damage"
+            value={
+              vehicle.secondary_damage || "Not available"
+            }
+          />
+
+          <Metric
+            label="Run Condition"
+            value={
+              vehicle.run_condition || "Not available"
+            }
+          />
+        </div>
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+            <div className="text-sm text-zinc-400">
+              Profyt Score
             </div>
 
-            <div className="mt-3 font-semibold text-green-500">
-              Retail Flip Mode
+            <div className="mt-4 text-4xl font-bold">
+              {vehicle.profyt_score !== null
+                ? vehicle.profyt_score
+                : "Pending"}
+
+              {vehicle.profyt_score !== null && (
+                <span className="text-lg text-zinc-500">
+                  /100
+                </span>
+              )}
             </div>
           </div>
 
           <Metric
             label="Expected Retail Price"
-            value={money(toNumber(retailPriceInput))}
+            value={money(numberOrNull(retailPriceInput))}
           />
 
           <Metric
@@ -337,18 +1034,61 @@ export default function VehicleDetailPage() {
           <Metric
             label="Recommended Max Bid"
             value={money(calculatedBid)}
-            highlight
+            highlight={calculatedBid !== null}
           />
         </div>
 
+        {galleryImages.length > 1 && (
+          <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold">
+                  Auction Images
+                </h2>
+
+                <p className="mt-2 text-zinc-400">
+                  Images captured from the auction listing.
+                </p>
+              </div>
+
+              <p className="text-sm text-zinc-500">
+                {galleryImages.length} images
+              </p>
+            </div>
+
+            <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {galleryImages.map((image, index) => (
+                <a
+                  key={image}
+                  href={image}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950"
+                >
+                  <img
+                    src={image}
+                    alt={`${vehicle.title || "Vehicle"} image ${
+                      index + 1
+                    }`}
+                    className="h-52 w-full object-cover transition hover:scale-105"
+                  />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-          <h2 className="text-2xl font-bold">Edit Vehicle Info</h2>
+          <h2 className="text-2xl font-bold">
+            Edit Vehicle and Auction Data
+          </h2>
 
           <p className="mt-2 text-zinc-400">
-            Fix vehicle details manually when the auction link does not include full information.
+            Correct information that was missing or unavailable from
+            the auction listing.
           </p>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <TextField
               label="Vehicle Title"
               value={titleInput}
@@ -373,8 +1113,13 @@ export default function VehicleDetailPage() {
             <TextField
               label="State"
               value={stateCodeInput}
-              onChange={setStateCodeInput}
+              onChange={(value) =>
+                setStateCodeInput(
+                  value.toUpperCase().slice(0, 2)
+                )
+              }
               placeholder="MD"
+              maxLength={2}
             />
 
             <TextField
@@ -390,39 +1135,88 @@ export default function VehicleDetailPage() {
               onChange={setLotNumberInput}
               placeholder="85739455"
             />
-          </div>
 
-          <div className="mt-4">
-            <TextField
-              label="Vehicle Image URL"
-              value={imageUrlInput}
-              onChange={setImageUrlInput}
-              placeholder="https://example.com/vehicle-image.jpg"
+            <NumberField
+              label="Mileage"
+              value={mileageInput}
+              onChange={setMileageInput}
+              showCurrency={false}
             />
+
+            <SelectField
+              label="Mileage Unit"
+              value={mileageUnitInput}
+              onChange={setMileageUnitInput}
+              options={[
+                { value: "miles", label: "Miles" },
+                { value: "km", label: "Kilometers" },
+                { value: "unknown", label: "Unknown" },
+              ]}
+            />
+
+            <TextField
+              label="Run Condition"
+              value={runConditionInput}
+              onChange={setRunConditionInput}
+              placeholder="Run and Drive"
+            />
+
+            <TextField
+              label="Primary Damage"
+              value={primaryDamageInput}
+              onChange={setPrimaryDamageInput}
+              placeholder="Front End"
+            />
+
+            <TextField
+              label="Secondary Damage"
+              value={secondaryDamageInput}
+              onChange={setSecondaryDamageInput}
+              placeholder="Minor Dent / Scratches"
+            />
+
+            <div className="md:col-span-2 xl:col-span-3">
+              <TextField
+                label="Primary Vehicle Image URL"
+                value={imageUrlInput}
+                onChange={setImageUrlInput}
+                placeholder="https://example.com/vehicle-image.jpg"
+              />
+            </div>
           </div>
 
           <div className="mt-6 flex flex-wrap items-center gap-4">
             <button
               onClick={saveVehicleInfo}
-              className="rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
+              disabled={savingInfo}
+              className="rounded-lg bg-green-500 px-5 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Save Vehicle Info
+              {savingInfo
+                ? "Saving..."
+                : "Save Vehicle Data"}
             </button>
 
             {infoMessage && (
-              <p className="text-sm text-green-400">{infoMessage}</p>
+              <StatusMessage
+                message={infoMessage}
+                isError={infoMessageIsError}
+              />
             )}
           </div>
         </div>
 
         <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-          <h2 className="text-2xl font-bold">Edit Profit Numbers</h2>
+          <h2 className="text-2xl font-bold">
+            Edit Profit Assumptions
+          </h2>
 
           <p className="mt-2 text-zinc-400">
-            Update your assumptions. Profytly recalculates the maximum bid instantly.
+            Retail value may be entered manually until the market
+            analyzer is connected. The maximum bid recalculates
+            instantly.
           </p>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-5">
+          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <NumberField
               label="Retail Price"
               value={retailPriceInput}
@@ -454,99 +1248,171 @@ export default function VehicleDetailPage() {
             />
           </div>
 
+          <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <FormulaItem
+              label="Retail Price"
+              value={money(numberOrNull(retailPriceInput))}
+            />
+
+            <FormulaItem
+              label="Desired Profit"
+              value={`- ${money(
+                toNumber(desiredProfitInput)
+              )}`}
+            />
+
+            <FormulaItem
+              label="Repairs"
+              value={`- ${money(toNumber(repairsInput))}`}
+            />
+
+            <FormulaItem
+              label="Transport"
+              value={`- ${money(toNumber(transportInput))}`}
+            />
+
+            <FormulaItem
+              label="Auction Fees"
+              value={`- ${money(toNumber(feesInput))}`}
+            />
+          </div>
+
+          <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950 p-5">
+            <p className="text-sm text-zinc-400">
+              Recommended Max Bid
+            </p>
+
+            <p className="mt-2 text-4xl font-bold text-green-500">
+              {money(calculatedBid)}
+            </p>
+
+            {calculatedBid === null && (
+              <p className="mt-2 text-sm text-zinc-500">
+                Enter a retail price to calculate the maximum bid.
+              </p>
+            )}
+          </div>
+
           <div className="mt-6 flex flex-wrap items-center gap-4">
             <button
               onClick={saveNumbers}
-              className="rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
+              disabled={savingNumbers}
+              className="rounded-lg bg-green-500 px-5 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Save Numbers
+              {savingNumbers
+                ? "Saving..."
+                : "Save Profit Assumptions"}
             </button>
 
             {numbersMessage && (
-              <p className="text-sm text-green-400">{numbersMessage}</p>
+              <StatusMessage
+                message={numbersMessage}
+                isError={numbersMessageIsError}
+              />
             )}
           </div>
         </div>
 
-        <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-          <h2 className="text-2xl font-bold">Profit Formula</h2>
+        {(vehicle.auction_page_title ||
+          vehicle.auction_description) && (
+          <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+            <h2 className="text-2xl font-bold">
+              Auction Page Metadata
+            </h2>
 
-          <p className="mt-2 text-zinc-400">
-            Recommended Max Bid = Expected Retail Price - Desired Profit -
-            Repairs - Transport - Auction Fees
-          </p>
+            {vehicle.auction_page_title && (
+              <div className="mt-5">
+                <p className="text-sm text-zinc-500">
+                  Page Title
+                </p>
 
-          <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950 p-5">
-            <div className="grid gap-3 text-sm md:grid-cols-5">
-              <FormulaItem
-                label="Retail Price"
-                value={money(toNumber(retailPriceInput))}
-              />
-
-              <FormulaItem
-                label="Desired Profit"
-                value={`- ${money(toNumber(desiredProfitInput))}`}
-              />
-
-              <FormulaItem
-                label="Repairs"
-                value={`- ${money(toNumber(repairsInput))}`}
-              />
-
-              <FormulaItem
-                label="Transport"
-                value={`- ${money(toNumber(transportInput))}`}
-              />
-
-              <FormulaItem
-                label="Auction Fees"
-                value={`- ${money(toNumber(feesInput))}`}
-              />
-            </div>
-
-            <div className="mt-5 border-t border-zinc-800 pt-5">
-              <div className="text-sm text-zinc-400">Result</div>
-              <div className="mt-2 text-4xl font-bold text-green-500">
-                {money(calculatedBid)}
+                <p className="mt-2 text-zinc-200">
+                  {vehicle.auction_page_title}
+                </p>
               </div>
-            </div>
+            )}
+
+            {vehicle.auction_description && (
+              <div className="mt-5">
+                <p className="text-sm text-zinc-500">
+                  Description
+                </p>
+
+                <p className="mt-2 leading-7 text-zinc-300">
+                  {vehicle.auction_description}
+                </p>
+              </div>
+            )}
           </div>
-        </div>
+        )}
 
         <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
           <h2 className="text-2xl font-bold">Notes</h2>
 
+          <p className="mt-2 text-zinc-400">
+            Save inspection reminders, bidding decisions and repair
+            observations.
+          </p>
+
           <div className="mt-5 flex flex-col gap-3">
             <textarea
               value={noteText}
-              onChange={(e) => setNoteText(e.target.value)}
-              placeholder="Example: Check front bumper, possible repaint, max bid $5,325..."
-              className="min-h-32 rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3"
+              onChange={(event) =>
+                setNoteText(event.target.value)
+              }
+              placeholder="Example: Check front bumper, verify keys and confirm transportation quote..."
+              className="min-h-32 rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none focus:border-green-500"
             />
 
-            <button
-              onClick={addNote}
-              className="w-fit rounded-lg bg-green-500 px-5 py-3 font-semibold text-black"
-            >
-              Add Note
-            </button>
+            <div className="flex flex-wrap items-center gap-4">
+              <button
+                onClick={addNote}
+                disabled={addingNote}
+                className="w-fit rounded-lg bg-green-500 px-5 py-3 font-semibold text-black disabled:opacity-60"
+              >
+                {addingNote ? "Adding..." : "Add Note"}
+              </button>
 
-            {message && <p className="text-sm text-green-400">{message}</p>}
+              {noteMessage && (
+                <StatusMessage
+                  message={noteMessage}
+                  isError={noteMessageIsError}
+                />
+              )}
+            </div>
           </div>
 
           <div className="mt-8 space-y-4">
             {notes.length === 0 ? (
-              <p className="text-zinc-500">No notes yet.</p>
+              <p className="text-zinc-500">
+                No notes have been added.
+              </p>
             ) : (
               notes.map((note) => (
                 <div
                   key={note.id}
                   className="rounded-xl border border-zinc-800 bg-zinc-950 p-4"
                 >
-                  <p className="text-zinc-200">{note.content}</p>
-                  <p className="mt-3 text-xs text-zinc-500">
-                    {new Date(note.created_at).toLocaleString()}
-                  </p>
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="whitespace-pre-wrap text-zinc-200">
+                        {note.content}
+                      </p>
+
+                      <p className="mt-3 text-xs text-zinc-500">
+                        {new Date(
+                          note.created_at
+                        ).toLocaleString()}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => deleteNote(note.id)}
+                      className="w-fit text-sm text-red-400"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))
             )}
@@ -568,15 +1434,61 @@ function Metric({
 }) {
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-      <div className="text-sm text-zinc-400">{label}</div>
-      <div
-        className={`mt-4 text-3xl font-bold ${
+      <p className="text-sm text-zinc-400">{label}</p>
+
+      <p
+        className={`mt-4 break-words text-2xl font-bold ${
           highlight ? "text-green-500" : "text-white"
         }`}
       >
         {value}
-      </div>
+      </p>
     </div>
+  );
+}
+
+function StatusBadge({
+  label,
+  variant,
+}: {
+  label: string;
+  variant: "green" | "blue" | "amber" | "neutral";
+}) {
+  const styles = {
+    green:
+      "border-green-500/20 bg-green-500/10 text-green-400",
+    blue:
+      "border-blue-500/20 bg-blue-500/10 text-blue-400",
+    amber:
+      "border-amber-500/20 bg-amber-500/10 text-amber-400",
+    neutral:
+      "border-zinc-700 bg-zinc-950 text-zinc-300",
+  };
+
+  return (
+    <span
+      className={`rounded-full border px-3 py-1 text-xs font-semibold ${styles[variant]}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function StatusMessage({
+  message,
+  isError,
+}: {
+  message: string;
+  isError: boolean;
+}) {
+  return (
+    <p
+      className={`text-sm ${
+        isError ? "text-red-400" : "text-green-400"
+      }`}
+    >
+      {message}
+    </p>
   );
 }
 
@@ -585,20 +1497,28 @@ function TextField({
   value,
   onChange,
   placeholder,
+  maxLength,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  maxLength?: number;
 }) {
   return (
     <div>
-      <label className="text-sm text-zinc-400">{label}</label>
+      <label className="text-sm text-zinc-400">
+        {label}
+      </label>
+
       <input
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        maxLength={maxLength}
+        onChange={(event) =>
+          onChange(event.target.value)
+        }
         placeholder={placeholder}
-        className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-white outline-none"
+        className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-white outline-none focus:border-green-500"
       />
     </div>
   );
@@ -608,29 +1528,98 @@ function NumberField({
   label,
   value,
   onChange,
+  showCurrency = true,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  showCurrency?: boolean;
 }) {
   return (
     <div>
-      <label className="text-sm text-zinc-400">{label}</label>
-      <input
-        type="number"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-white outline-none"
-      />
+      <label className="text-sm text-zinc-400">
+        {label}
+      </label>
+
+      <div className="relative mt-2">
+        {showCurrency && (
+          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500">
+            $
+          </span>
+        )}
+
+        <input
+          type="number"
+          min="0"
+          step={showCurrency ? "0.01" : "1"}
+          value={value}
+          onChange={(event) =>
+            onChange(event.target.value)
+          }
+          className={`w-full rounded-lg border border-zinc-700 bg-zinc-950 py-3 pr-4 text-white outline-none focus:border-green-500 ${
+            showCurrency ? "pl-9" : "pl-4"
+          }`}
+        />
+      </div>
     </div>
   );
 }
 
-function FormulaItem({ label, value }: { label: string; value: string }) {
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{
+    value: string;
+    label: string;
+  }>;
+}) {
   return (
     <div>
-      <div className="text-zinc-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-white">{value}</div>
+      <label className="text-sm text-zinc-400">
+        {label}
+      </label>
+
+      <select
+        value={value}
+        onChange={(event) =>
+          onChange(event.target.value)
+        }
+        className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-3 text-white outline-none focus:border-green-500"
+      >
+        {options.map((option) => (
+          <option
+            key={option.value}
+            value={option.value}
+          >
+            {option.label}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
+
+function FormulaItem({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3">
+      <p className="text-xs text-zinc-500">{label}</p>
+
+      <p className="mt-1 font-semibold text-white">
+        {value}
+      </p>
+    </div>
+  );
+}
+
