@@ -12,6 +12,8 @@ import {
   type AuctionAnalysis,
 } from "@/lib/analyze-vehicle-client";
 
+import { runMarketAnalysis } from "@/lib/market-analysis-client";
+
 type AnalysisStatus = "success" | "limited" | "pending";
 
 type Vehicle = {
@@ -75,6 +77,60 @@ type Note = {
   created_at: string;
 };
 
+type MarketComparable = {
+  title: string;
+  price: number | null;
+  mileage: number | null;
+  location: string | null;
+  url: string | null;
+  source: string;
+};
+
+type MarketSearchSource = {
+  url: string;
+  title: string | null;
+  type: string | null;
+};
+
+type MarketAnalysisRow = {
+  id: string;
+  status: "pending" | "completed" | "limited" | "failed";
+
+  market_value_low: number | null;
+  market_value_high: number | null;
+  market_value_estimate: number | null;
+
+  confidence_score: number | null;
+
+  repair_risk: "low" | "medium" | "high" | "unknown" | null;
+  risk_score: number | null;
+
+  repair_cost_low: number | null;
+  repair_cost_high: number | null;
+  repair_cost_estimate: number | null;
+
+  profyt_score: number | null;
+  recommended_bid: number | null;
+
+  recommendation:
+    | "strong_buy"
+    | "buy"
+    | "watch"
+    | "avoid"
+    | "insufficient_data"
+    | null;
+
+  summary: string | null;
+  key_factors: string[] | null;
+  warnings: string[] | null;
+
+  comparable_vehicles: MarketComparable[] | null;
+  search_sources: MarketSearchSource[] | null;
+
+  model_name: string | null;
+  created_at: string;
+};
+
 export default function VehicleDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -87,11 +143,15 @@ export default function VehicleDetailPage() {
   const [userId, setUserId] = useState("");
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
+  const [marketAnalysis, setMarketAnalysis] =
+    useState<MarketAnalysisRow | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [savingInfo, setSavingInfo] = useState(false);
   const [savingNumbers, setSavingNumbers] = useState(false);
   const [reanalyzing, setReanalyzing] = useState(false);
+  const [runningMarketAnalysis, setRunningMarketAnalysis] =
+    useState(false);
   const [addingNote, setAddingNote] = useState(false);
   const [deletingVehicle, setDeletingVehicle] = useState(false);
 
@@ -187,7 +247,11 @@ export default function VehicleDetailPage() {
 
     setUserId(authData.user.id);
 
-    const [vehicleResponse, notesResponse] = await Promise.all([
+    const [
+      vehicleResponse,
+      notesResponse,
+      marketAnalysisResponse,
+    ] = await Promise.all([
       supabase
         .from("vehicles")
         .select("*")
@@ -201,6 +265,39 @@ export default function VehicleDetailPage() {
         .eq("vehicle_id", vehicleId)
         .eq("user_id", authData.user.id)
         .order("created_at", { ascending: false }),
+
+      supabase
+        .from("vehicle_market_analyses")
+        .select(
+          [
+            "id",
+            "status",
+            "market_value_low",
+            "market_value_high",
+            "market_value_estimate",
+            "confidence_score",
+            "repair_risk",
+            "risk_score",
+            "repair_cost_low",
+            "repair_cost_high",
+            "repair_cost_estimate",
+            "profyt_score",
+            "recommended_bid",
+            "recommendation",
+            "summary",
+            "key_factors",
+            "warnings",
+            "comparable_vehicles",
+            "search_sources",
+            "model_name",
+            "created_at",
+          ].join(",")
+        )
+        .eq("vehicle_id", vehicleId)
+        .eq("user_id", authData.user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ]);
 
     if (vehicleResponse.error) {
@@ -222,10 +319,19 @@ export default function VehicleDetailPage() {
       setPageMessageIsError(true);
     }
 
+    if (marketAnalysisResponse.error) {
+      setPageMessage(marketAnalysisResponse.error.message);
+      setPageMessageIsError(true);
+    }
+
     const loadedVehicle = vehicleResponse.data as Vehicle;
 
     setVehicle(loadedVehicle);
     setNotes((notesResponse.data || []) as Note[]);
+    setMarketAnalysis(
+      (marketAnalysisResponse.data as MarketAnalysisRow | null) ??
+        null
+    );
 
     setTitleInput(loadedVehicle.title ?? "");
     setTitleStatusInput(loadedVehicle.title_status ?? "");
@@ -481,7 +587,6 @@ export default function VehicleDetailPage() {
       .from("vehicles")
       .update({
         retail_price: retailPrice,
-        market_value: retailPrice,
 
         desired_profit: desiredProfit,
         target_profit: desiredProfit,
@@ -624,6 +729,38 @@ export default function VehicleDetailPage() {
     }
 
     await loadPage();
+  }
+
+  async function runAiMarketAnalysis() {
+    if (!vehicle || !vehicleId) {
+      return;
+    }
+
+    setPageMessage("");
+    setPageMessageIsError(false);
+    setRunningMarketAnalysis(true);
+
+    try {
+      const result = await runMarketAnalysis(vehicleId);
+
+      await loadPage();
+
+      setPageMessage(
+        result.status === "completed"
+          ? "AI market analysis completed successfully."
+          : "AI market analysis completed with limited market data."
+      );
+      setPageMessageIsError(false);
+    } catch (error) {
+      setPageMessage(
+        error instanceof Error
+          ? error.message
+          : "AI market analysis failed."
+      );
+      setPageMessageIsError(true);
+    } finally {
+      setRunningMarketAnalysis(false);
+    }
   }
 
   async function addNote() {
@@ -966,6 +1103,310 @@ export default function VehicleDetailPage() {
             </div>
           )}
 
+        <div className="mt-8 rounded-2xl border border-green-500/20 bg-gradient-to-br from-green-500/10 via-zinc-900 to-zinc-900 p-6">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-2xl font-bold">
+                  AI Market Analysis
+                </h2>
+
+                {marketAnalysis && (
+                  <>
+                    <StatusBadge
+                      label={
+                        marketAnalysis.status === "completed"
+                          ? "Completed"
+                          : marketAnalysis.status === "limited"
+                            ? "Limited"
+                            : marketAnalysis.status === "failed"
+                              ? "Failed"
+                              : "Pending"
+                      }
+                      variant={
+                        marketAnalysis.status === "completed"
+                          ? "green"
+                          : marketAnalysis.status === "limited"
+                            ? "amber"
+                            : "neutral"
+                      }
+                    />
+
+                    {marketAnalysis.recommendation && (
+                      <RecommendationBadge
+                        recommendation={
+                          marketAnalysis.recommendation
+                        }
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+
+              <p className="mt-2 max-w-3xl text-zinc-400">
+                Search current US listings, estimate realistic resale
+                value, measure repair risk and calculate a data-backed
+                maximum bid.
+              </p>
+
+              {marketAnalysis && (
+                <p className="mt-3 text-xs text-zinc-500">
+                  Last AI analysis:{" "}
+                  {new Date(
+                    marketAnalysis.created_at
+                  ).toLocaleString()}
+                  {marketAnalysis.model_name
+                    ? ` · ${marketAnalysis.model_name}`
+                    : ""}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={runAiMarketAnalysis}
+              disabled={runningMarketAnalysis}
+              className="w-fit rounded-lg bg-green-500 px-5 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {runningMarketAnalysis
+                ? "Researching Market..."
+                : marketAnalysis
+                  ? "Run New AI Analysis"
+                  : "Run AI Market Analysis"}
+            </button>
+          </div>
+
+          {!marketAnalysis ? (
+            <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6">
+              <p className="font-semibold text-zinc-200">
+                No AI market analysis has been run yet.
+              </p>
+
+              <p className="mt-2 text-sm leading-6 text-zinc-500">
+                Complete missing mileage, damage and run-condition
+                fields first for a stronger estimate. Profytly will not
+                invent unavailable vehicle information.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <AiMetric
+                  label="AI Market Value"
+                  value={money(
+                    marketAnalysis.market_value_estimate
+                  )}
+                  note={
+                    marketAnalysis.market_value_low !== null &&
+                    marketAnalysis.market_value_high !== null
+                      ? `${money(
+                          marketAnalysis.market_value_low
+                        )} – ${money(
+                          marketAnalysis.market_value_high
+                        )} estimated range`
+                      : "Reliable range unavailable"
+                  }
+                  highlight
+                />
+
+                <AiMetric
+                  label="AI Recommended Max Bid"
+                  value={money(
+                    marketAnalysis.recommended_bid
+                  )}
+                  note="Includes profit, fees, transport and repair assumptions"
+                  highlight
+                />
+
+                <AiMetric
+                  label="Profyt Score"
+                  value={
+                    marketAnalysis.profyt_score !== null
+                      ? `${marketAnalysis.profyt_score}/100`
+                      : "Pending"
+                  }
+                  note="Opportunity score based on confidence, risk and margin"
+                />
+
+                <AiMetric
+                  label="Confidence"
+                  value={
+                    marketAnalysis.confidence_score !== null
+                      ? `${marketAnalysis.confidence_score}%`
+                      : "-"
+                  }
+                  note="Strength of current comparable-market evidence"
+                />
+              </div>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <AiMetric
+                  label="Repair Risk"
+                  value={formatRepairRisk(
+                    marketAnalysis.repair_risk
+                  )}
+                  note={
+                    marketAnalysis.risk_score !== null
+                      ? `Risk score ${marketAnalysis.risk_score}/100`
+                      : "Risk score unavailable"
+                  }
+                />
+
+                <AiMetric
+                  label="Repair Cost Estimate"
+                  value={money(
+                    marketAnalysis.repair_cost_estimate
+                  )}
+                  note={
+                    marketAnalysis.repair_cost_low !== null &&
+                    marketAnalysis.repair_cost_high !== null
+                      ? `${money(
+                          marketAnalysis.repair_cost_low
+                        )} – ${money(
+                          marketAnalysis.repair_cost_high
+                        )} estimated range`
+                      : "Fallback budget may be used"
+                  }
+                />
+
+                <AiMetric
+                  label="Comparable Listings"
+                  value={String(
+                    marketAnalysis.comparable_vehicles?.length ??
+                      0
+                  )}
+                  note="Current public listings included by the analysis"
+                />
+
+                <AiMetric
+                  label="Research Sources"
+                  value={String(
+                    marketAnalysis.search_sources?.length ?? 0
+                  )}
+                  note="Unique public web sources reviewed"
+                />
+              </div>
+
+              <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950/70 p-5">
+                <p className="text-sm font-semibold uppercase tracking-wider text-green-500">
+                  Analyst Summary
+                </p>
+
+                <p className="mt-3 whitespace-pre-wrap leading-7 text-zinc-300">
+                  {marketAnalysis.summary ||
+                    "No written AI summary was returned."}
+                </p>
+              </div>
+
+              <div className="mt-6 grid gap-6 lg:grid-cols-2">
+                <AnalysisList
+                  title="Key Factors"
+                  items={marketAnalysis.key_factors ?? []}
+                  emptyText="No key factors were returned."
+                  variant="neutral"
+                />
+
+                <AnalysisList
+                  title="AI Warnings"
+                  items={marketAnalysis.warnings ?? []}
+                  emptyText="No additional AI warnings."
+                  variant="warning"
+                />
+              </div>
+
+              {marketAnalysis.comparable_vehicles &&
+                marketAnalysis.comparable_vehicles.length > 0 && (
+                  <div className="mt-6">
+                    <h3 className="text-lg font-bold">
+                      Comparable Vehicles
+                    </h3>
+
+                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                      {marketAnalysis.comparable_vehicles.map(
+                        (comparable, index) => (
+                          <div
+                            key={`${comparable.url || comparable.title}-${index}`}
+                            className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-5"
+                          >
+                            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="font-semibold text-zinc-100">
+                                  {comparable.title}
+                                </p>
+
+                                <p className="mt-1 text-sm capitalize text-zinc-500">
+                                  {comparable.source}
+                                  {comparable.location
+                                    ? ` · ${comparable.location}`
+                                    : ""}
+                                </p>
+                              </div>
+
+                              <p className="text-xl font-bold text-green-500">
+                                {money(comparable.price)}
+                              </p>
+                            </div>
+
+                            <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-zinc-400">
+                              <span>
+                                Mileage:{" "}
+                                {comparable.mileage !== null
+                                  ? comparable.mileage.toLocaleString()
+                                  : "Not listed"}
+                              </span>
+
+                              {comparable.url && (
+                                <a
+                                  href={comparable.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="font-semibold text-green-400 hover:text-green-300"
+                                >
+                                  Open Listing
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              {marketAnalysis.search_sources &&
+                marketAnalysis.search_sources.length > 0 && (
+                  <div className="mt-6">
+                    <h3 className="text-lg font-bold">
+                      Research Sources
+                    </h3>
+
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {marketAnalysis.search_sources.map(
+                        (source, index) => (
+                          <a
+                            key={`${source.url}-${index}`}
+                            href={source.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 transition hover:border-zinc-600"
+                          >
+                            <p className="line-clamp-2 font-semibold text-zinc-200">
+                              {source.title ||
+                                new URL(source.url).hostname}
+                            </p>
+
+                            <p className="mt-2 truncate text-xs text-zinc-500">
+                              {source.url}
+                            </p>
+                          </a>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+            </>
+          )}
+        </div>
+
         <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Metric
             label="Mileage"
@@ -1211,9 +1652,10 @@ export default function VehicleDetailPage() {
           </h2>
 
           <p className="mt-2 text-zinc-400">
-            Retail value may be entered manually until the market
-            analyzer is connected. The maximum bid recalculates
-            instantly.
+            Use the AI estimate as a starting point or enter your own
+            expected resale value. Manual assumptions recalculate the
+            working maximum bid instantly without deleting the saved AI
+            market analysis.
           </p>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -1421,6 +1863,136 @@ export default function VehicleDetailPage() {
       </section>
     </main>
   );
+}
+
+function AiMetric({
+  label,
+  value,
+  note,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  note: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-5">
+      <p className="text-sm text-zinc-400">{label}</p>
+
+      <p
+        className={`mt-3 break-words text-2xl font-bold ${
+          highlight ? "text-green-500" : "text-white"
+        }`}
+      >
+        {value}
+      </p>
+
+      <p className="mt-2 text-xs leading-5 text-zinc-500">
+        {note}
+      </p>
+    </div>
+  );
+}
+
+function RecommendationBadge({
+  recommendation,
+}: {
+  recommendation: NonNullable<
+    MarketAnalysisRow["recommendation"]
+  >;
+}) {
+  const labels = {
+    strong_buy: "Strong Buy",
+    buy: "Buy",
+    watch: "Watch",
+    avoid: "Avoid",
+    insufficient_data: "Insufficient Data",
+  };
+
+  const styles = {
+    strong_buy:
+      "border-green-500/30 bg-green-500/15 text-green-400",
+    buy:
+      "border-emerald-500/30 bg-emerald-500/15 text-emerald-400",
+    watch:
+      "border-amber-500/30 bg-amber-500/15 text-amber-400",
+    avoid:
+      "border-red-500/30 bg-red-500/15 text-red-400",
+    insufficient_data:
+      "border-zinc-700 bg-zinc-950 text-zinc-300",
+  };
+
+  return (
+    <span
+      className={`rounded-full border px-3 py-1 text-xs font-semibold ${styles[recommendation]}`}
+    >
+      {labels[recommendation]}
+    </span>
+  );
+}
+
+function AnalysisList({
+  title,
+  items,
+  emptyText,
+  variant,
+}: {
+  title: string;
+  items: string[];
+  emptyText: string;
+  variant: "neutral" | "warning";
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-5 ${
+        variant === "warning"
+          ? "border-amber-500/20 bg-amber-500/5"
+          : "border-zinc-800 bg-zinc-950/70"
+      }`}
+    >
+      <h3
+        className={`font-bold ${
+          variant === "warning"
+            ? "text-amber-400"
+            : "text-zinc-100"
+        }`}
+      >
+        {title}
+      </h3>
+
+      {items.length === 0 ? (
+        <p className="mt-3 text-sm text-zinc-500">
+          {emptyText}
+        </p>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {items.map((item, index) => (
+            <p
+              key={`${item}-${index}`}
+              className={`text-sm leading-6 ${
+                variant === "warning"
+                  ? "text-amber-200/80"
+                  : "text-zinc-400"
+              }`}
+            >
+              • {item}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatRepairRisk(
+  value: MarketAnalysisRow["repair_risk"]
+) {
+  if (!value || value === "unknown") {
+    return "Unknown";
+  }
+
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }
 
 function Metric({
