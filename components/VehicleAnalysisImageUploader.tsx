@@ -23,15 +23,11 @@ type StoredVehicleImage = {
 type Props = {
   vehicleId: string;
   userId: string;
-  analysisRunning: boolean;
-  onRunAnalysis: () => Promise<void>;
 };
 
 export default function VehicleAnalysisImageUploader({
   vehicleId,
   userId,
-  analysisRunning,
-  onRunAnalysis,
 }: Props) {
   const [images, setImages] = useState<StoredVehicleImage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -291,14 +287,6 @@ export default function VehicleAnalysisImageUploader({
             />
           </label>
 
-          <button
-            type="button"
-            onClick={() => void onRunAnalysis()}
-            disabled={analysisRunning || images.length === 0}
-            className="rounded-lg bg-green-500 px-5 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {analysisRunning ? "Analyzing Photos..." : "Run Vision Analysis"}
-          </button>
         </div>
       </div>
 
@@ -359,7 +347,7 @@ export default function VehicleAnalysisImageUploader({
 
       <p className="mt-5 text-xs leading-5 text-zinc-500">
         Photos are stored in a private Supabase bucket and are sent to the AI
-        through short-lived signed URLs only when you run an analysis.
+        through short-lived signed URLs when you run the Full AI Analysis below.
       </p>
     </section>
   );

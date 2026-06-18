@@ -114,9 +114,21 @@ type MarketAnalysisRow = {
   repair_risk: "low" | "medium" | "high" | "unknown" | null;
   risk_score: number | null;
 
+  visible_repair_cost_low: number | null;
+  visible_repair_cost_high: number | null;
+  visible_repair_cost_estimate: number | null;
+
+  hidden_damage_contingency_low: number | null;
+  hidden_damage_contingency_high: number | null;
+  hidden_damage_contingency_estimate: number | null;
+
   repair_cost_low: number | null;
   repair_cost_high: number | null;
   repair_cost_estimate: number | null;
+
+  vision_detected_mileage: number | null;
+  vision_detected_mileage_unit: "miles" | "km" | "unknown" | null;
+  mileage_mismatch: boolean | null;
 
   profyt_score: number | null;
   recommended_bid: number | null;
@@ -163,6 +175,7 @@ export default function VehicleDetailPage() {
     useState(false);
   const [addingNote, setAddingNote] = useState(false);
   const [deletingVehicle, setDeletingVehicle] = useState(false);
+  const [savingDetectedMileage, setSavingDetectedMileage] = useState(false);
 
   const [pageMessage, setPageMessage] = useState("");
   const [pageMessageIsError, setPageMessageIsError] =
@@ -294,9 +307,18 @@ export default function VehicleDetailPage() {
             "hidden_damage_risks",
             "repair_risk",
             "risk_score",
+            "visible_repair_cost_low",
+            "visible_repair_cost_high",
+            "visible_repair_cost_estimate",
+            "hidden_damage_contingency_low",
+            "hidden_damage_contingency_high",
+            "hidden_damage_contingency_estimate",
             "repair_cost_low",
             "repair_cost_high",
             "repair_cost_estimate",
+            "vision_detected_mileage",
+            "vision_detected_mileage_unit",
+            "mileage_mismatch",
             "profyt_score",
             "recommended_bid",
             "recommendation",
@@ -779,6 +801,49 @@ export default function VehicleDetailPage() {
     }
   }
 
+  async function useDetectedMileage() {
+    if (
+      !vehicle ||
+      !vehicleId ||
+      !userId ||
+      !marketAnalysis ||
+      marketAnalysis.vision_detected_mileage === null
+    ) {
+      return;
+    }
+
+    setSavingDetectedMileage(true);
+    setPageMessage("");
+    setPageMessageIsError(false);
+
+    const detectedUnit =
+      marketAnalysis.vision_detected_mileage_unit === "km"
+        ? "km"
+        : "miles";
+
+    const { error } = await supabase
+      .from("vehicles")
+      .update({
+        mileage: marketAnalysis.vision_detected_mileage,
+        mileage_unit: detectedUnit,
+      })
+      .eq("id", vehicleId)
+      .eq("user_id", userId);
+
+    setSavingDetectedMileage(false);
+
+    if (error) {
+      setPageMessage(error.message);
+      setPageMessageIsError(true);
+      return;
+    }
+
+    setMileageInput(String(marketAnalysis.vision_detected_mileage));
+    setMileageUnitInput(detectedUnit);
+    setPageMessage("Vision-detected mileage saved to the vehicle.");
+    await loadPage();
+  }
+
   async function addNote() {
     setNoteMessage("");
     setNoteMessageIsError(false);
@@ -929,6 +994,16 @@ export default function VehicleDetailPage() {
   }
 
   const calculatedBid = calculateRecommendedBid();
+
+  const activeMileageMismatch = marketAnalysis
+    ? mileageValuesMismatch(
+        vehicle.mileage,
+        vehicle.mileage_unit,
+        marketAnalysis.vision_detected_mileage,
+        marketAnalysis.vision_detected_mileage_unit,
+        Boolean(marketAnalysis.mileage_mismatch)
+      )
+    : false;
 
   const backHref = vehicle.is_sold
     ? "/sold"
@@ -1122,8 +1197,6 @@ export default function VehicleDetailPage() {
         <VehicleAnalysisImageUploader
           vehicleId={vehicle.id}
           userId={userId}
-          analysisRunning={runningMarketAnalysis}
-          onRunAnalysis={runAiMarketAnalysis}
         />
 
         <div className="mt-8 rounded-2xl border border-green-500/20 bg-gradient-to-br from-green-500/10 via-zinc-900 to-zinc-900 p-6">
@@ -1191,10 +1264,10 @@ export default function VehicleDetailPage() {
               className="w-fit rounded-lg bg-green-500 px-5 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
             >
               {runningMarketAnalysis
-                ? "Researching Market..."
+                ? "Analyzing Vehicle..."
                 : marketAnalysis
-                  ? "Re-run Full Analysis"
-                  : "Run Full Analysis"}
+                  ? "Re-run Full AI Analysis"
+                  : "Run Full AI Analysis"}
             </button>
           </div>
 
@@ -1275,7 +1348,41 @@ export default function VehicleDetailPage() {
                 />
 
                 <AiMetric
-                  label="Repair Cost Estimate"
+                  label="Visible Repair Cost"
+                  value={money(
+                    marketAnalysis.visible_repair_cost_estimate
+                  )}
+                  note={
+                    marketAnalysis.visible_repair_cost_low !== null &&
+                    marketAnalysis.visible_repair_cost_high !== null
+                      ? `${money(
+                          marketAnalysis.visible_repair_cost_low
+                        )} – ${money(
+                          marketAnalysis.visible_repair_cost_high
+                        )} flipper-cost range`
+                      : "Visible repair estimate unavailable"
+                  }
+                />
+
+                <AiMetric
+                  label="Hidden Damage Contingency"
+                  value={money(
+                    marketAnalysis.hidden_damage_contingency_estimate
+                  )}
+                  note={
+                    marketAnalysis.hidden_damage_contingency_low !== null &&
+                    marketAnalysis.hidden_damage_contingency_high !== null
+                      ? `${money(
+                          marketAnalysis.hidden_damage_contingency_low
+                        )} – ${money(
+                          marketAnalysis.hidden_damage_contingency_high
+                        )} risk allowance`
+                      : "No separate contingency estimate"
+                  }
+                />
+
+                <AiMetric
+                  label="Recommended Repair Budget"
                   value={money(
                     marketAnalysis.repair_cost_estimate
                   )}
@@ -1286,11 +1393,14 @@ export default function VehicleDetailPage() {
                           marketAnalysis.repair_cost_low
                         )} – ${money(
                           marketAnalysis.repair_cost_high
-                        )} estimated range`
+                        )} total range`
                       : "Fallback budget may be used"
                   }
+                  highlight
                 />
+              </div>
 
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <AiMetric
                   label="Estimated As-Is Value"
                   value={money(
@@ -1321,6 +1431,64 @@ export default function VehicleDetailPage() {
                       : "Repair estimate was not visually verified"
                   }
                 />
+
+                <AiMetric
+                  label="Saved Mileage"
+                  value={
+                    vehicle.mileage !== null
+                      ? `${Number(vehicle.mileage).toLocaleString()} ${
+                          vehicle.mileage_unit || "miles"
+                        }`
+                      : "Not available"
+                  }
+                  note="Mileage currently saved on the vehicle"
+                />
+
+                <div
+                  className={`rounded-2xl border p-6 ${
+                    activeMileageMismatch
+                      ? "border-amber-500/30 bg-amber-500/10"
+                      : "border-zinc-800 bg-zinc-950/70"
+                  }`}
+                >
+                  <p className="text-sm text-zinc-400">Vision Mileage</p>
+                  <p className="mt-4 text-2xl font-bold text-white">
+                    {marketAnalysis.vision_detected_mileage !== null
+                      ? `${Number(
+                          marketAnalysis.vision_detected_mileage
+                        ).toLocaleString()} ${
+                          marketAnalysis.vision_detected_mileage_unit ||
+                          "miles"
+                        }`
+                      : "Not detected"}
+                  </p>
+
+                  <p
+                    className={`mt-2 text-xs leading-5 ${
+                      activeMileageMismatch
+                        ? "text-amber-300"
+                        : "text-zinc-500"
+                    }`}
+                  >
+                    {activeMileageMismatch
+                      ? "Mileage differs from the saved vehicle value."
+                      : "No material mileage mismatch detected."}
+                  </p>
+
+                  {marketAnalysis.vision_detected_mileage !== null &&
+                    activeMileageMismatch && (
+                      <button
+                        type="button"
+                        onClick={useDetectedMileage}
+                        disabled={savingDetectedMileage}
+                        className="mt-4 rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
+                      >
+                        {savingDetectedMileage
+                          ? "Saving..."
+                          : "Use Detected Mileage"}
+                      </button>
+                    )}
+                </div>
               </div>
 
               <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950/70 p-5">
@@ -2050,6 +2218,31 @@ function formatRepairRisk(
   }
 
   return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function mileageValuesMismatch(
+  savedMileage: number | null,
+  savedUnit: string | null,
+  detectedMileage: number | null,
+  detectedUnit: string | null,
+  fallback: boolean
+) {
+  if (savedMileage === null || detectedMileage === null) {
+    return fallback;
+  }
+
+  const savedMiles =
+    savedUnit?.toLowerCase() === "km"
+      ? savedMileage * 0.621371
+      : savedMileage;
+
+  const detectedMiles =
+    detectedUnit?.toLowerCase() === "km"
+      ? detectedMileage * 0.621371
+      : detectedMileage;
+
+  const tolerance = Math.max(500, savedMiles * 0.01);
+  return Math.abs(savedMiles - detectedMiles) > tolerance;
 }
 
 function Metric({

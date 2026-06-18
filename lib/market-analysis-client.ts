@@ -38,10 +38,22 @@ export type MarketAnalysisResult = {
   repairRisk: "low" | "medium" | "high" | "unknown";
   riskScore: number;
 
+  visibleRepairCostLow: number | null;
+  visibleRepairCostHigh: number | null;
+  visibleRepairCostEstimate: number | null;
+
+  hiddenDamageContingencyLow: number | null;
+  hiddenDamageContingencyHigh: number | null;
+  hiddenDamageContingencyEstimate: number | null;
+
   repairCostLow: number | null;
   repairCostHigh: number | null;
   repairCostEstimate: number | null;
   repairCostUsed: number;
+
+  detectedMileage: number | null;
+  detectedMileageUnit: "miles" | "km" | "unknown" | null;
+  mileageMismatch: boolean;
 
   desiredProfit: number;
   auctionFees: number;

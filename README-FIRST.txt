@@ -1,29 +1,18 @@
-PROFYTLY — PRIVATE AUCTION PHOTO UPLOAD + AI VISION
+PROFYTLY VISION CALIBRATION UPGRADE
 
-This package updates:
-- components/VehicleAnalysisImageUploader.tsx (new)
-- app/dashboard/vehicle/[id]/page.tsx
-- app/api/market-analysis/route.ts
+This upgrade:
+- removes the duplicate Vision/Full Analysis buttons
+- keeps one Run Full AI Analysis button
+- separates visible repair cost from hidden-damage contingency
+- calculates a combined recommended repair budget
+- calibrates repair pricing for independent-shop / flipper economics
+- stores mileage detected from auction photos
+- shows mileage mismatch and lets the user accept detected mileage
 
-What it adds:
-- Upload up to 6 private JPG/PNG/WEBP auction photos per vehicle.
-- Preview and delete uploaded photos.
-- Run AI Vision directly after upload.
-- Market-analysis API reads the private image records, creates short-lived signed URLs, and sends the photos to OpenAI Vision.
-- Existing public auction image URLs remain supported and are used first.
-
-Before extracting this package, the following Supabase items must already exist:
-- private bucket: vehicle-analysis-images
-- table: vehicle_analysis_images
-- RLS policies for the table and storage.objects
-
-After extracting:
-1. npx tsc --noEmit
-2. npm run build
-3. npm run dev
-
-Test:
-- Open an existing vehicle.
-- Upload 4–6 Copart photos.
-- Click Run Vision Analysis.
-- Confirm Vision Evidence shows the number of images analyzed and repair estimate changes.
+1) Run the SQL in supabase-vision-calibration.sql.
+2) Extract this archive in the Profytly project root.
+3) Run:
+   npx tsc --noEmit
+   npm run build
+   npm run dev
+4) Upload photos and click Run Full AI Analysis.
