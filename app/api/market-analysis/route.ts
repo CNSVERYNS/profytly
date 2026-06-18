@@ -59,6 +59,32 @@ type ComparableVehicle = {
   source: string;
 };
 
+type AuctionListingEvidence = {
+  lot_number: string | null;
+  mileage: number | null;
+  mileage_unit: "miles" | "km" | "unknown" | null;
+  source_url: string | null;
+  confidence_score: number;
+};
+
+type PreviousAnalysisRow = {
+  status: string;
+  input_snapshot: unknown;
+  image_count_analyzed: number | null;
+  market_value_low: number | string | null;
+  market_value_high: number | string | null;
+  market_value_estimate: number | string | null;
+  as_is_value_low: number | string | null;
+  as_is_value_high: number | string | null;
+  as_is_value_estimate: number | string | null;
+  visible_repair_cost_low: number | string | null;
+  visible_repair_cost_high: number | string | null;
+  visible_repair_cost_estimate: number | string | null;
+  hidden_damage_contingency_low: number | string | null;
+  hidden_damage_contingency_high: number | string | null;
+  hidden_damage_contingency_estimate: number | string | null;
+};
+
 type AiMarketOutput = {
   status: "completed" | "limited";
   repaired_resale_value_low: number | null;
@@ -77,6 +103,7 @@ type AiMarketOutput = {
   hidden_damage_contingency_low: number | null;
   hidden_damage_contingency_high: number | null;
   hidden_damage_contingency_estimate: number | null;
+  auction_listing_evidence: AuctionListingEvidence;
   detected_mileage: number | null;
   detected_mileage_unit: "miles" | "km" | "unknown" | null;
   visible_damage: string[];
@@ -111,6 +138,31 @@ const MARKET_ANALYSIS_SCHEMA = {
     hidden_damage_contingency_low: { type: ["number", "null"] },
     hidden_damage_contingency_high: { type: ["number", "null"] },
     hidden_damage_contingency_estimate: { type: ["number", "null"] },
+    auction_listing_evidence: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        lot_number: { type: ["string", "null"] },
+        mileage: { type: ["number", "null"] },
+        mileage_unit: {
+          type: ["string", "null"],
+          enum: ["miles", "km", "unknown", null],
+        },
+        source_url: { type: ["string", "null"] },
+        confidence_score: {
+          type: "integer",
+          minimum: 0,
+          maximum: 100,
+        },
+      },
+      required: [
+        "lot_number",
+        "mileage",
+        "mileage_unit",
+        "source_url",
+        "confidence_score",
+      ],
+    },
     detected_mileage: { type: ["number", "null"] },
     detected_mileage_unit: {
       type: ["string", "null"],
@@ -156,6 +208,7 @@ const MARKET_ANALYSIS_SCHEMA = {
     "hidden_damage_contingency_low",
     "hidden_damage_contingency_high",
     "hidden_damage_contingency_estimate",
+    "auction_listing_evidence",
     "detected_mileage",
     "detected_mileage_unit",
     "visible_damage",
@@ -325,6 +378,37 @@ export async function POST(request: NextRequest) {
 
   const visionUsed = imageUrls.length > 0;
 
+  const { data: previousAnalysisData } = await supabase
+    .from("vehicle_market_analyses")
+    .select(
+      [
+        "status",
+        "input_snapshot",
+        "image_count_analyzed",
+        "market_value_low",
+        "market_value_high",
+        "market_value_estimate",
+        "as_is_value_low",
+        "as_is_value_high",
+        "as_is_value_estimate",
+        "visible_repair_cost_low",
+        "visible_repair_cost_high",
+        "visible_repair_cost_estimate",
+        "hidden_damage_contingency_low",
+        "hidden_damage_contingency_high",
+        "hidden_damage_contingency_estimate",
+      ].join(",")
+    )
+    .eq("vehicle_id", vehicle.id)
+    .eq("user_id", user.id)
+    .in("status", ["completed", "limited"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const previousAnalysis =
+    (previousAnalysisData as PreviousAnalysisRow | null) ?? null;
+
   const inputSnapshot = {
     analysis_date: new Date().toISOString().slice(0, 10),
     vehicle: {
@@ -394,11 +478,13 @@ export async function POST(request: NextRequest) {
     > = [
       {
         type: "input_text",
-        text: `Research and analyze the following auction vehicle.\n\n${JSON.stringify(
-          inputSnapshot,
-          null,
-          2
-        )}`,
+        text: `Research and analyze the following auction vehicle.
+
+First open the exact auction URL below and extract verified listing evidence from that exact lot page when available:
+${vehicle.auction_url || "No auction URL supplied"}
+
+Vehicle and financial data:
+${JSON.stringify(inputSnapshot, null, 2)}`,
       },
       ...imageUrls.map((imageUrl) => ({
         type: "input_image" as const,
@@ -462,6 +548,32 @@ export async function POST(request: NextRequest) {
     return jsonError(errorMessage, 502);
   }
 
+  const listingEvidence = validateAuctionListingEvidence(
+    aiOutput.auction_listing_evidence,
+    vehicle,
+    rawSearchSources
+  );
+
+  const effectiveListingMileage =
+    nullableNumber(vehicle.listing_mileage) ??
+    listingEvidence?.mileage ??
+    null;
+
+  const effectiveListingMileageUnit =
+    vehicle.listing_mileage_unit ||
+    listingEvidence?.mileageUnit ||
+    null;
+
+  const sameEvidenceAsPrevious =
+    !listingEvidence &&
+    previousAnalysis !== null &&
+    analysisInputsMatch(
+      previousAnalysis.input_snapshot,
+      inputSnapshot,
+      previousAnalysis.image_count_analyzed,
+      imageUrls.length
+    );
+
   let marketValueLow = nonNegativeNumber(aiOutput.repaired_resale_value_low);
   let marketValueHigh = nonNegativeNumber(aiOutput.repaired_resale_value_high);
   [marketValueLow, marketValueHigh] = orderRange(
@@ -478,6 +590,18 @@ export async function POST(request: NextRequest) {
     marketValueHigh
   );
 
+  if (sameEvidenceAsPrevious && previousAnalysis) {
+    [marketValueLow, marketValueHigh, marketValueEstimate] =
+      stabilizeMoneyRange(
+        marketValueLow,
+        marketValueHigh,
+        marketValueEstimate,
+        previousAnalysis.market_value_low,
+        previousAnalysis.market_value_high,
+        previousAnalysis.market_value_estimate
+      );
+  }
+
   let asIsValueLow = nonNegativeNumber(aiOutput.as_is_value_low);
   let asIsValueHigh = nonNegativeNumber(aiOutput.as_is_value_high);
   [asIsValueLow, asIsValueHigh] = orderRange(asIsValueLow, asIsValueHigh);
@@ -487,6 +611,18 @@ export async function POST(request: NextRequest) {
     asIsValueLow,
     asIsValueHigh
   );
+
+  if (sameEvidenceAsPrevious && previousAnalysis) {
+    [asIsValueLow, asIsValueHigh, asIsValueEstimate] =
+      stabilizeMoneyRange(
+        asIsValueLow,
+        asIsValueHigh,
+        asIsValueEstimate,
+        previousAnalysis.as_is_value_low,
+        previousAnalysis.as_is_value_high,
+        previousAnalysis.as_is_value_estimate
+      );
+  }
 
   const confidenceScore = clampInteger(
     aiOutput.confidence_score,
@@ -519,6 +655,21 @@ export async function POST(request: NextRequest) {
     visibleRepairCostHigh
   );
 
+  if (sameEvidenceAsPrevious && previousAnalysis) {
+    [
+      visibleRepairCostLow,
+      visibleRepairCostHigh,
+      visibleRepairCostEstimate,
+    ] = stabilizeMoneyRange(
+      visibleRepairCostLow,
+      visibleRepairCostHigh,
+      visibleRepairCostEstimate,
+      previousAnalysis.visible_repair_cost_low,
+      previousAnalysis.visible_repair_cost_high,
+      previousAnalysis.visible_repair_cost_estimate
+    );
+  }
+
   let hiddenDamageContingencyLow = nonNegativeNumber(
     aiOutput.hidden_damage_contingency_low
   );
@@ -537,6 +688,21 @@ export async function POST(request: NextRequest) {
     hiddenDamageContingencyLow,
     hiddenDamageContingencyHigh
   );
+
+  if (sameEvidenceAsPrevious && previousAnalysis) {
+    [
+      hiddenDamageContingencyLow,
+      hiddenDamageContingencyHigh,
+      hiddenDamageContingencyEstimate,
+    ] = stabilizeMoneyRange(
+      hiddenDamageContingencyLow,
+      hiddenDamageContingencyHigh,
+      hiddenDamageContingencyEstimate,
+      previousAnalysis.hidden_damage_contingency_low,
+      previousAnalysis.hidden_damage_contingency_high,
+      previousAnalysis.hidden_damage_contingency_estimate
+    );
+  }
 
   const hasRepairComponents =
     visibleRepairCostEstimate !== null ||
@@ -564,8 +730,8 @@ export async function POST(request: NextRequest) {
     ? normalizeMileageUnit(aiOutput.detected_mileage_unit)
     : null;
   const mileageMismatch = calculateMileageMismatch(
-    nullableNumber(vehicle.listing_mileage),
-    vehicle.listing_mileage_unit,
+    effectiveListingMileage,
+    effectiveListingMileageUnit,
     detectedMileage,
     detectedMileageUnit
   );
@@ -632,6 +798,18 @@ export async function POST(request: NextRequest) {
     aiOutput.hidden_damage_risks,
     12
   );
+
+  if (listingEvidence && vehicle.listing_mileage === null) {
+    warnings.unshift(
+      `Auction-listing mileage was captured from the exact ${vehicle.source || "auction"} lot page: ${listingEvidence.mileage.toLocaleString()} ${listingEvidence.mileageUnit}.`
+    );
+  }
+
+  if (sameEvidenceAsPrevious) {
+    warnings.push(
+      "Repeated-analysis values were stabilized against the prior result because the vehicle evidence and assumptions did not change."
+    );
+  }
 
   if (requiresVisionButMissing) {
     warnings.unshift(
@@ -714,15 +892,34 @@ export async function POST(request: NextRequest) {
     return jsonError(analysisUpdateError.message, 500);
   }
 
+  const vehicleUpdates: JsonRecord = {
+    market_value: marketValueEstimate,
+    retail_price: marketValueEstimate,
+    estimated_repairs: repairCostUsed,
+    recommended_bid: recommendedBid,
+    profyt_score: profytScore,
+  };
+
+  if (
+    listingEvidence &&
+    nullableNumber(vehicle.listing_mileage) === null
+  ) {
+    vehicleUpdates.listing_mileage = listingEvidence.mileage;
+    vehicleUpdates.listing_mileage_unit =
+      listingEvidence.mileageUnit;
+    vehicleUpdates.listing_mileage_captured_at =
+      new Date().toISOString();
+
+    if (nullableNumber(vehicle.mileage) === null) {
+      vehicleUpdates.mileage = listingEvidence.mileage;
+      vehicleUpdates.mileage_unit =
+        listingEvidence.mileageUnit;
+    }
+  }
+
   const { error: vehicleUpdateError } = await supabase
     .from("vehicles")
-    .update({
-      market_value: marketValueEstimate,
-      retail_price: marketValueEstimate,
-      estimated_repairs: repairCostUsed,
-      recommended_bid: recommendedBid,
-      profyt_score: profytScore,
-    })
+    .update(vehicleUpdates)
     .eq("id", vehicle.id)
     .eq("user_id", user.id);
 
@@ -761,7 +958,14 @@ export async function POST(request: NextRequest) {
       repairCostUsed,
       detectedMileage,
       detectedMileageUnit,
+      listingMileageCaptured: listingEvidence?.mileage ?? null,
+      listingMileageUnitCaptured:
+        listingEvidence?.mileageUnit ?? null,
+      listingEvidenceUrl:
+        listingEvidence?.sourceUrl ?? null,
       mileageMismatch,
+      stabilizedAgainstPrevious:
+        sameEvidenceAsPrevious,
       desiredProfit,
       auctionFees,
       transportCost,
@@ -824,6 +1028,314 @@ async function getPrivateVehicleImageUrls(
   return signedUrls;
 }
 
+
+function validateAuctionListingEvidence(
+  evidence: AuctionListingEvidence,
+  vehicle: VehicleRow,
+  rawSources: JsonRecord[]
+): {
+  mileage: number;
+  mileageUnit: "miles" | "km" | "unknown";
+  sourceUrl: string;
+} | null {
+  const mileage = nonNegativeNumber(evidence?.mileage);
+  const mileageUnit = normalizeMileageUnit(
+    evidence?.mileage_unit
+  );
+  const sourceUrl = normalizeUrl(evidence?.source_url);
+  const confidenceScore = clampInteger(
+    evidence?.confidence_score,
+    0,
+    100,
+    0
+  );
+
+  if (
+    mileage === null ||
+    mileage <= 0 ||
+    mileage > 2_000_000 ||
+    !mileageUnit ||
+    !sourceUrl ||
+    confidenceScore < 80
+  ) {
+    return null;
+  }
+
+  const source = cleanText(vehicle.source)?.toLowerCase();
+  const hostname = new URL(sourceUrl).hostname.toLowerCase();
+
+  const hostMatches =
+    source === "copart"
+      ? hostname === "copart.com" ||
+        hostname.endsWith(".copart.com")
+      : source === "iaai"
+        ? hostname === "iaai.com" ||
+          hostname.endsWith(".iaai.com")
+        : false;
+
+  if (!hostMatches) {
+    return null;
+  }
+
+  const expectedLot = normalizeLotNumberText(
+    vehicle.lot_number
+  );
+  const evidenceLot = normalizeLotNumberText(
+    evidence?.lot_number
+  );
+
+  if (
+    expectedLot &&
+    evidenceLot &&
+    expectedLot !== evidenceLot
+  ) {
+    return null;
+  }
+
+  if (
+    expectedLot &&
+    !sourceUrl.includes(expectedLot)
+  ) {
+    return null;
+  }
+
+  const allowedSourceUrls = new Set(
+    rawSources
+      .map((sourceRecord) =>
+        canonicalUrl(sourceRecord.url)
+      )
+      .filter(
+        (value): value is string =>
+          Boolean(value)
+      )
+  );
+
+  const canonicalEvidenceUrl =
+    canonicalUrl(sourceUrl);
+
+  if (
+    !canonicalEvidenceUrl ||
+    !allowedSourceUrls.has(
+      canonicalEvidenceUrl
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    mileage,
+    mileageUnit,
+    sourceUrl,
+  };
+}
+
+function normalizeLotNumberText(
+  value: unknown
+) {
+  const text = cleanText(value);
+
+  if (!text) {
+    return null;
+  }
+
+  return text.match(/\d{5,}/)?.[0] || null;
+}
+
+function analysisInputsMatch(
+  previousSnapshot: unknown,
+  currentSnapshot: unknown,
+  previousImageCount: number | null,
+  currentImageCount: number
+) {
+  if (
+    !isRecord(previousSnapshot) ||
+    !isRecord(currentSnapshot)
+  ) {
+    return false;
+  }
+
+  const previousVehicle = isRecord(
+    previousSnapshot.vehicle
+  )
+    ? previousSnapshot.vehicle
+    : null;
+
+  const currentVehicle = isRecord(
+    currentSnapshot.vehicle
+  )
+    ? currentSnapshot.vehicle
+    : null;
+
+  const previousFinancial = isRecord(
+    previousSnapshot.financial_assumptions
+  )
+    ? previousSnapshot.financial_assumptions
+    : null;
+
+  const currentFinancial = isRecord(
+    currentSnapshot.financial_assumptions
+  )
+    ? currentSnapshot.financial_assumptions
+    : null;
+
+  if (
+    !previousVehicle ||
+    !currentVehicle ||
+    !previousFinancial ||
+    !currentFinancial
+  ) {
+    return false;
+  }
+
+  const vehicleKeys = [
+    "year",
+    "make",
+    "model",
+    "listing_mileage",
+    "listing_mileage_unit",
+    "working_mileage",
+    "working_mileage_unit",
+    "title_status",
+    "primary_damage",
+    "secondary_damage",
+    "run_condition",
+    "auction_source",
+    "lot_number",
+  ];
+
+  const financialKeys = [
+    "target_profit",
+    "auction_fees",
+    "transport_cost",
+    "fallback_repairs",
+  ];
+
+  const sameVehicle = vehicleKeys.every(
+    (key) =>
+      normalizeComparableInput(
+        previousVehicle[key]
+      ) ===
+      normalizeComparableInput(
+        currentVehicle[key]
+      )
+  );
+
+  const sameFinancial = financialKeys.every(
+    (key) =>
+      normalizeComparableInput(
+        previousFinancial[key]
+      ) ===
+      normalizeComparableInput(
+        currentFinancial[key]
+      )
+  );
+
+  return (
+    sameVehicle &&
+    sameFinancial &&
+    (previousImageCount ?? 0) ===
+      currentImageCount
+  );
+}
+
+function normalizeComparableInput(
+  value: unknown
+) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  if (typeof value === "number") {
+    return String(
+      Math.round(value * 100) / 100
+    );
+  }
+
+  return String(value)
+    .trim()
+    .toLowerCase();
+}
+
+function stabilizeMoneyRange(
+  currentLow: number | null,
+  currentHigh: number | null,
+  currentEstimate: number | null,
+  previousLowValue: unknown,
+  previousHighValue: unknown,
+  previousEstimateValue: unknown
+): [number | null, number | null, number | null] {
+  const previousLow =
+    nonNegativeNumber(previousLowValue);
+  const previousHigh =
+    nonNegativeNumber(previousHighValue);
+  const previousEstimate =
+    nonNegativeNumber(previousEstimateValue);
+
+  const low = blendMoney(
+    previousLow,
+    currentLow
+  );
+  const high = blendMoney(
+    previousHigh,
+    currentHigh
+  );
+
+  const ordered = orderRange(low, high);
+
+  const estimate = normalizeEstimateWithinRange(
+    blendMoney(
+      previousEstimate,
+      currentEstimate
+    ),
+    ordered[0],
+    ordered[1]
+  );
+
+  return [
+    ordered[0],
+    ordered[1],
+    estimate,
+  ];
+}
+
+function blendMoney(
+  previous: number | null,
+  current: number | null
+) {
+  if (
+    previous === null &&
+    current === null
+  ) {
+    return null;
+  }
+
+  if (previous === null) {
+    return roundMoneyToNearest50(
+      current as number
+    );
+  }
+
+  if (current === null) {
+    return roundMoneyToNearest50(
+      previous
+    );
+  }
+
+  return roundMoneyToNearest50(
+    previous * 0.65 +
+      current * 0.35
+  );
+}
+
+function roundMoneyToNearest50(
+  value: number
+) {
+  return Math.round(value / 50) * 50;
+}
+
 function buildInstructions(visionUsed: boolean) {
   return `
 You are Profytly's US auction-vehicle market and damage analyst.
@@ -854,6 +1366,14 @@ MARKET RESEARCH RULES:
 - Never describe an asking price as a completed sale.
 - Every comparable URL must come from a web-search source actually opened during this request. Never invent a URL.
 - Return no more than 8 strong comparable listings.
+
+AUCTION-LISTING EVIDENCE RULES:
+- Open the exact vehicle.auction_url before general market research.
+- auction_listing_evidence may be populated only from that exact Copart or IAAI lot page, not from a comparable listing, search snippet for another lot, an image odometer, or the working mileage.
+- The evidence source URL must identify the same lot_number.
+- When the exact lot page clearly states an odometer reading, return it in auction_listing_evidence with confidence_score 80 or higher.
+- When the exact lot page cannot be opened or the mileage is not explicitly shown, return null mileage and source_url and use a low confidence score.
+- Never copy detected_mileage from the dashboard photo into auction_listing_evidence.
 
 DAMAGE, VISION AND ODOMETER RULES:
 - Vision images supplied: ${visionUsed ? "yes" : "no"}.

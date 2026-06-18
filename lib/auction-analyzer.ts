@@ -70,6 +70,17 @@ type StructuredData = {
   images: string[];
 };
 
+type EmbeddedAuctionData = {
+  mileage: MileageValue | null;
+  titleStatus: string | null;
+  location: string | null;
+  primaryDamage: string | null;
+  secondaryDamage: string | null;
+  runCondition: string | null;
+  images: string[];
+  used: boolean;
+};
+
 type ParsedHtmlData = {
   blocked: boolean;
 
@@ -91,6 +102,7 @@ type ParsedHtmlData = {
   usedMetadata: boolean;
   usedJsonLd: boolean;
   usedPageText: boolean;
+  usedEmbeddedData: boolean;
 };
 
 const MAX_HTML_BYTES = 4 * 1024 * 1024;
@@ -229,6 +241,10 @@ export async function analyzeAuctionUrl(
 
       if (parsedHtml.usedPageText) {
         extractedBy.push("page-text");
+      }
+
+      if (parsedHtml.usedEmbeddedData) {
+        extractedBy.push("embedded-data");
       }
     }
   } catch (error) {
@@ -468,6 +484,12 @@ async function fetchAuctionHtml(
           Accept:
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
+          "Upgrade-Insecure-Requests": "1",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
+          DNT: "1",
+          Referer: `${currentUrl.origin}/`,
         },
       });
     } catch (error) {
@@ -651,6 +673,7 @@ function parseAuctionHtml(
 
   const jsonLdValues = readJsonLd($);
   const structured = extractStructuredData(jsonLdValues);
+  const embedded = extractEmbeddedAuctionData($, html, baseUrl);
 
   const bodyClone = $("body").clone();
 
@@ -660,10 +683,9 @@ function parseAuctionHtml(
 
   const bodyText = normalizeWhitespace(bodyClone.text());
 
-  const blocked = isBlockedPage(
-    pageTitle,
-    bodyText
-  );
+  const blocked =
+    isBlockedPage(pageTitle, bodyText) &&
+    !embedded.used;
 
   if (blocked) {
     return {
@@ -687,6 +709,7 @@ function parseAuctionHtml(
       usedMetadata: false,
       usedJsonLd: false,
       usedPageText: false,
+      usedEmbeddedData: false,
     };
   }
 
@@ -695,7 +718,8 @@ function parseAuctionHtml(
       "Title/Sale Doc",
       "Title Code",
       "Document Type",
-    ])
+    ]),
+    embedded.titleStatus
   );
 
   const location = firstNonEmpty(
@@ -703,32 +727,44 @@ function parseAuctionHtml(
       "Sale Location",
       "Branch",
       "Location",
-    ])
+    ]),
+    embedded.location
   );
 
   const primaryDamage = firstNonEmpty(
     extractLabeledValue(bodyText, [
       "Primary Damage",
-    ])
+    ]),
+    embedded.primaryDamage
   );
 
   const secondaryDamage = firstNonEmpty(
     extractLabeledValue(bodyText, [
       "Secondary Damage",
-    ])
+    ]),
+    embedded.secondaryDamage
   );
 
-  const mileage = extractMileage(bodyText);
+  const mileage =
+    extractMileage(bodyText) ||
+    embedded.mileage;
 
-  const runCondition = detectRunCondition(
-    bodyText
-  );
+  const runCondition =
+    detectRunCondition(bodyText) ||
+    embedded.runCondition;
 
-  const images = uniqueHttpUrls(
-    [
-      ...metadataImages,
-      ...structured.images,
-    ],
+  const domImages = extractDomImageCandidates($);
+
+  const images = rankAuctionImageUrls(
+    uniqueHttpUrls(
+      [
+        ...metadataImages,
+        ...structured.images,
+        ...domImages,
+        ...embedded.images,
+      ],
+      baseUrl
+    ),
     baseUrl
   );
 
@@ -766,7 +802,266 @@ function parseAuctionHtml(
         secondaryDamage ||
         runCondition
     ),
+
+    usedEmbeddedData: embedded.used,
   };
+}
+
+function extractEmbeddedAuctionData(
+  $: CheerioAPI,
+  html: string,
+  baseUrl: string
+): EmbeddedAuctionData {
+  const scriptParts: string[] = [];
+
+  $("script").each((_, element) => {
+    const value = $(element).html();
+
+    if (
+      value?.trim() &&
+      scriptParts.join("").length < 2_000_000
+    ) {
+      scriptParts.push(value);
+    }
+  });
+
+  const searchable = [
+    ...scriptParts,
+    html.slice(0, 2_000_000),
+  ]
+    .join("\n")
+    .replaceAll("\\/", "/")
+    .replaceAll("\\u002F", "/")
+    .replaceAll("\\u003A", ":")
+    .replaceAll("&quot;", '"');
+
+  const mileage =
+    extractMileage(searchable) ||
+    extractMileageFromEmbeddedJson(searchable);
+
+  const titleStatus = extractJsonLikeText(searchable, [
+    "titleStatus",
+    "titleCode",
+    "saleDocument",
+    "documentType",
+  ]);
+
+  const location = extractJsonLikeText(searchable, [
+    "saleLocation",
+    "locationName",
+    "branchName",
+  ]);
+
+  const primaryDamage = extractJsonLikeText(searchable, [
+    "primaryDamage",
+    "primaryDamageDescription",
+  ]);
+
+  const secondaryDamage = extractJsonLikeText(searchable, [
+    "secondaryDamage",
+    "secondaryDamageDescription",
+  ]);
+
+  const runCondition = firstNonEmpty(
+    extractJsonLikeText(searchable, [
+      "runCondition",
+      "highlights",
+    ]),
+    detectRunCondition(searchable)
+  );
+
+  const images = rankAuctionImageUrls(
+    extractHttpImageUrls(searchable),
+    baseUrl
+  );
+
+  return {
+    mileage,
+    titleStatus,
+    location,
+    primaryDamage,
+    secondaryDamage,
+    runCondition,
+    images,
+    used: Boolean(
+      mileage ||
+        titleStatus ||
+        location ||
+        primaryDamage ||
+        secondaryDamage ||
+        runCondition ||
+        images.length
+    ),
+  };
+}
+
+function extractMileageFromEmbeddedJson(
+  text: string
+): MileageValue | null {
+  const patterns = [
+    /["'](?:odometer|odometerReading|mileage|mileageFromOdometer|odometerValue)["']\s*:\s*(?:\{[^{}]{0,250})?["']?(?:value|amount)?["']?\s*:?\s*["']?([\d,.]{2,})["']?[^\n\r]{0,80}?(mi|mile|miles|km|kilometer|kilometers|smi|kmt)?/i,
+    /(?:odometer|mileage)\s*[:=-]\s*["']?([\d,.]{2,})["']?\s*(mi|mile|miles|km|kilometer|kilometers|smi|kmt)?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+
+    if (!match) {
+      continue;
+    }
+
+    const value = Number(match[1].replaceAll(",", ""));
+
+    if (
+      !Number.isFinite(value) ||
+      value < 1 ||
+      value > 2_000_000
+    ) {
+      continue;
+    }
+
+    return {
+      value,
+      unit: normalizeMileageUnit(match[2]),
+    };
+  }
+
+  return null;
+}
+
+function extractJsonLikeText(
+  text: string,
+  keys: string[]
+) {
+  for (const key of keys) {
+    const pattern = new RegExp(
+      `["']${escapeRegExp(key)}["']\\s*:\\s*["']([^"'\\n\\r]{1,180})["']`,
+      "i"
+    );
+
+    const match = text.match(pattern);
+    const value = match?.[1]
+      ?.replaceAll("\\u0026", "&")
+      .replaceAll("\\/", "/")
+      .trim();
+
+    if (value) {
+      return normalizeWhitespace(value);
+    }
+  }
+
+  return null;
+}
+
+function extractDomImageCandidates(
+  $: CheerioAPI
+) {
+  const results: string[] = [];
+
+  $(
+    "img[src], img[data-src], img[data-original], source[srcset]"
+  ).each((_, element) => {
+    const candidate =
+      $(element).attr("src") ||
+      $(element).attr("data-src") ||
+      $(element).attr("data-original") ||
+      $(element).attr("srcset");
+
+    if (!candidate) {
+      return;
+    }
+
+    results.push(
+      ...candidate
+        .split(",")
+        .map((part) => part.trim().split(/\s+/)[0])
+        .filter(Boolean)
+    );
+  });
+
+  return results;
+}
+
+function extractHttpImageUrls(
+  text: string
+) {
+  const matches = text.match(
+    /https?:\/\/[^"'\\s<>]+?\.(?:jpe?g|png|webp)(?:\?[^"'\\s<>]*)?/gi
+  );
+
+  return matches || [];
+}
+
+function rankAuctionImageUrls(
+  urls: string[],
+  baseUrl: string
+) {
+  const lotNumber =
+    normalizeLotNumber(baseUrl) || "";
+
+  return urls
+    .map((url, index) => ({
+      url,
+      index,
+      score: scoreAuctionImageUrl(
+        url,
+        lotNumber
+      ),
+    }))
+    .filter((item) => item.score > -20)
+    .sort(
+      (first, second) =>
+        second.score - first.score ||
+        first.index - second.index
+    )
+    .map((item) => item.url);
+}
+
+function scoreAuctionImageUrl(
+  rawUrl: string,
+  lotNumber: string
+) {
+  const value = rawUrl.toLowerCase();
+  let score = 0;
+
+  if (
+    lotNumber &&
+    value.includes(lotNumber)
+  ) {
+    score += 12;
+  }
+
+  if (
+    value.includes("copart") ||
+    value.includes("iaai")
+  ) {
+    score += 5;
+  }
+
+  if (
+    value.includes("vehicle") ||
+    value.includes("/lot/") ||
+    value.includes("thumbnail") ||
+    value.includes("image")
+  ) {
+    score += 3;
+  }
+
+  if (
+    value.includes("logo") ||
+    value.includes("icon") ||
+    value.includes("sprite") ||
+    value.includes("flag") ||
+    value.includes("avatar") ||
+    value.includes("placeholder") ||
+    value.includes("badge") ||
+    value.includes("carfax") ||
+    value.includes("auto-grade")
+  ) {
+    score -= 30;
+  }
+
+  return score;
 }
 
 function getMetaContent(
