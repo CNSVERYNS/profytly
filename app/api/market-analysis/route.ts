@@ -845,7 +845,9 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
   const recommendation = getRecommendation(
     finalStatus,
     profytScore,
-    recommendedBid
+    recommendedBid,
+    confidenceScore,
+    riskScore
   );
   const keyFactors = normalizeStringArray(aiOutput.key_factors, 8);
   const warnings = normalizeStringArray(aiOutput.warnings, 10);
@@ -2169,16 +2171,40 @@ function describeEvidenceChanges(
 function getRecommendation(
   status: "completed" | "limited",
   profytScore: number | null,
-  recommendedBid: number | null
+  recommendedBid: number | null,
+  confidenceScore: number,
+  riskScore: number
 ): "strong_buy" | "buy" | "watch" | "avoid" | "insufficient_data" {
   if (recommendedBid !== null && recommendedBid <= 0) return "avoid";
+
   if (profytScore === null || recommendedBid === null) {
     return "insufficient_data";
   }
-  if (status === "limited") return "insufficient_data";
-  if (profytScore >= 80) return "strong_buy";
-  if (profytScore >= 65) return "buy";
-  if (profytScore >= 45) return "watch";
+
+  // Limited market evidence can still support a cautious bid ceiling,
+  // but it should never be presented as an unconditional buy signal.
+  if (status === "limited") {
+    return profytScore >= 45 && riskScore < 80 ? "watch" : "avoid";
+  }
+
+  if (
+    profytScore >= 82 &&
+    confidenceScore >= 65 &&
+    riskScore <= 40
+  ) {
+    return "strong_buy";
+  }
+
+  if (
+    profytScore >= 65 &&
+    confidenceScore >= 50 &&
+    riskScore <= 65
+  ) {
+    return "buy";
+  }
+
+  if (profytScore >= 45 && riskScore < 80) return "watch";
+
   return "avoid";
 }
 

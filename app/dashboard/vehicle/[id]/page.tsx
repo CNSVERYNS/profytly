@@ -1195,6 +1195,9 @@ export default function VehicleDetailPage() {
                         recommendation={
                           marketAnalysis.recommendation
                         }
+                        recommendedBid={
+                          marketAnalysis.recommended_bid
+                        }
                       />
                     )}
                   </>
@@ -2039,17 +2042,30 @@ function AiMetric({
 
 function RecommendationBadge({
   recommendation,
+  recommendedBid,
 }: {
   recommendation: NonNullable<
     MarketAnalysisRow["recommendation"]
   >;
+  recommendedBid: number | null;
 }) {
+  const bidLabel =
+    recommendedBid !== null && recommendedBid > 0
+      ? `$${Math.round(recommendedBid).toLocaleString()}`
+      : null;
+
   const labels = {
-    strong_buy: "Strong Buy",
-    buy: "Buy",
-    watch: "Watch",
+    strong_buy: bidLabel
+      ? `Strong Buy — Max ${bidLabel}`
+      : "Strong Buy",
+    buy: bidLabel
+      ? `Buy Below ${bidLabel}`
+      : "Buy",
+    watch: bidLabel
+      ? `Buy With Caution — Max ${bidLabel}`
+      : "Buy With Caution",
     avoid: "Avoid",
-    insufficient_data: "Decision Pending",
+    insufficient_data: "More Data Needed",
   };
 
   const styles = {
