@@ -493,12 +493,13 @@ export default function VehicleDetailPage() {
     const transport = toNumber(transportInput);
     const fees = toNumber(feesInput);
 
-    return (
+    return Math.max(
+      0,
       retailPrice -
-      desiredProfit -
-      repairs -
-      transport -
-      fees
+        desiredProfit -
+        repairs -
+        transport -
+        fees
     );
   }
 
@@ -1865,6 +1866,13 @@ export default function VehicleDetailPage() {
             {calculatedBid === null && (
               <p className="mt-2 text-sm text-zinc-500">
                 Enter a retail price to calculate the maximum bid.
+              </p>
+            )}
+
+            {calculatedBid === 0 && (
+              <p className="mt-2 text-sm text-amber-400">
+                No economically viable bid exists with the current
+                resale value, profit target and cost assumptions.
               </p>
             )}
           </div>

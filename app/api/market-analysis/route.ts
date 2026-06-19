@@ -66,8 +66,12 @@ type AuctionListingEvidence = {
 
 type PreviousAnalysisRow = {
   status: string;
+  created_at: string;
   input_snapshot: unknown;
   image_count_analyzed: number | null;
+  comparable_vehicles: unknown;
+  profyt_score: number | string | null;
+  recommended_bid: number | string | null;
   market_value_low: number | string | null;
   market_value_high: number | string | null;
   market_value_estimate: number | string | null;
@@ -361,7 +365,7 @@ export async function POST(request: NextRequest) {
     MAX_VISION_IMAGES
   );
 
-  const privateImageUrls = await getPrivateVehicleImageUrls(
+  const privateImageEvidence = await getPrivateVehicleImageEvidence(
     supabase,
     vehicle.id,
     user.id,
@@ -369,8 +373,13 @@ export async function POST(request: NextRequest) {
   );
 
   const imageUrls = normalizeImageUrls(
-    [...publicImageUrls, ...privateImageUrls],
+    [...publicImageUrls, ...privateImageEvidence.urls],
     MAX_VISION_IMAGES
+  );
+
+  const imageEvidenceFingerprint = buildImageEvidenceFingerprint(
+    publicImageUrls,
+    privateImageEvidence.storagePaths
   );
 
   const visionUsed = imageUrls.length > 0;
@@ -380,8 +389,12 @@ export async function POST(request: NextRequest) {
     .select(
       [
         "status",
+        "created_at",
         "input_snapshot",
         "image_count_analyzed",
+        "comparable_vehicles",
+        "profyt_score",
+        "recommended_bid",
         "market_value_low",
         "market_value_high",
         "market_value_estimate",
@@ -434,6 +447,7 @@ export async function POST(request: NextRequest) {
         10
       ),
       image_count_available: imageUrls.length,
+      image_evidence_fingerprint: imageEvidenceFingerprint,
     },
     financial_assumptions: {
       target_profit: desiredProfit,
@@ -562,6 +576,40 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
       imageUrls.length
     );
 
+  const detectedMileage = visionUsed
+    ? nonNegativeNumber(aiOutput.detected_mileage)
+    : null;
+  const detectedMileageUnit = visionUsed
+    ? normalizeMileageUnit(aiOutput.detected_mileage_unit)
+    : null;
+  const shouldUseVisionMileage = detectedMileage !== null && detectedMileage > 0;
+  const resolvedMileageUnit = detectedMileageUnit === "km" ? "km" : "miles";
+  const subjectMileage = detectedMileage ?? nullableNumber(vehicle.mileage);
+
+  const currentComparableVehicles = normalizeComparableVehicles(
+    aiOutput.comparable_vehicles,
+    rawSearchSources,
+    vehicle
+  );
+  const previousComparableVehicles = normalizeStoredComparableVehicles(
+    previousAnalysis?.comparable_vehicles,
+    vehicle
+  );
+  const reusedPreviousComparables = Boolean(
+    sameEvidenceAsPrevious &&
+      previousAnalysis &&
+      isAnalysisFresh(previousAnalysis.created_at, 24) &&
+      previousComparableVehicles.length >= 3
+  );
+  const comparableVehicles = reusedPreviousComparables
+    ? previousComparableVehicles
+    : currentComparableVehicles;
+  const comparableMarketAnchor = calculateComparableMarketAnchor(
+    comparableVehicles,
+    subjectMileage,
+    vehicle.title_status
+  );
+
   let marketValueLow = nonNegativeNumber(aiOutput.repaired_resale_value_low);
   let marketValueHigh = nonNegativeNumber(aiOutput.repaired_resale_value_high);
   [marketValueLow, marketValueHigh] = orderRange(
@@ -578,17 +626,17 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
     marketValueHigh
   );
 
-  if (sameEvidenceAsPrevious && previousAnalysis) {
-    [marketValueLow, marketValueHigh, marketValueEstimate] =
-      stabilizeMoneyRange(
-        marketValueLow,
-        marketValueHigh,
-        marketValueEstimate,
-        previousAnalysis.market_value_low,
-        previousAnalysis.market_value_high,
-        previousAnalysis.market_value_estimate
-      );
-  }
+  [marketValueLow, marketValueHigh, marketValueEstimate] =
+    stabilizeMarketValueRange({
+      currentLow: marketValueLow,
+      currentHigh: marketValueHigh,
+      currentEstimate: marketValueEstimate,
+      previousLow: previousAnalysis?.market_value_low,
+      previousHigh: previousAnalysis?.market_value_high,
+      previousEstimate: previousAnalysis?.market_value_estimate,
+      comparableAnchor: comparableMarketAnchor,
+      sameEvidenceAsPrevious,
+    });
 
   let asIsValueLow = nonNegativeNumber(aiOutput.as_is_value_low);
   let asIsValueHigh = nonNegativeNumber(aiOutput.as_is_value_high);
@@ -608,7 +656,10 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
         asIsValueEstimate,
         previousAnalysis.as_is_value_low,
         previousAnalysis.as_is_value_high,
-        previousAnalysis.as_is_value_estimate
+        previousAnalysis.as_is_value_estimate,
+        400,
+        0.08,
+        0.8
       );
   }
 
@@ -654,7 +705,10 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
       visibleRepairCostEstimate,
       previousAnalysis.visible_repair_cost_low,
       previousAnalysis.visible_repair_cost_high,
-      previousAnalysis.visible_repair_cost_estimate
+      previousAnalysis.visible_repair_cost_estimate,
+      300,
+      0.15,
+      0.8
     );
   }
 
@@ -688,7 +742,10 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
       hiddenDamageContingencyEstimate,
       previousAnalysis.hidden_damage_contingency_low,
       previousAnalysis.hidden_damage_contingency_high,
-      previousAnalysis.hidden_damage_contingency_estimate
+      previousAnalysis.hidden_damage_contingency_estimate,
+      250,
+      0.2,
+      0.8
     );
   }
 
@@ -711,25 +768,11 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
       )
     : null;
 
-  const detectedMileage = visionUsed
-    ? nonNegativeNumber(aiOutput.detected_mileage)
-    : null;
-  const detectedMileageUnit = visionUsed
-    ? normalizeMileageUnit(aiOutput.detected_mileage_unit)
-    : null;
-
-  const shouldUseVisionMileage =
-    detectedMileage !== null &&
-    detectedMileage > 0;
-
-  const resolvedMileageUnit =
-    detectedMileageUnit === "km" ? "km" : "miles";
-
   // Vision mileage is the single primary mileage source.
   const mileageMismatch = false;
 
   const repairCostUsed = repairCostEstimate ?? fallbackRepairs;
-  const recommendedBid =
+  let recommendedBid =
     marketValueEstimate !== null
       ? roundBidDown(
           marketValueEstimate -
@@ -740,6 +783,13 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
         )
       : null;
 
+  if (sameEvidenceAsPrevious && previousAnalysis) {
+    recommendedBid = stabilizeRecommendedBid(
+      recommendedBid,
+      previousAnalysis.recommended_bid
+    );
+  }
+
   const dataCompleteness = calculateDataCompleteness(vehicle);
   const titleScore = calculateTitleScore(vehicle.title_status);
   const profitMarginScore = calculateProfitMarginScore(
@@ -747,7 +797,7 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
     desiredProfit
   );
 
-  const profytScore =
+  let profytScore =
     marketValueEstimate !== null
       ? clampInteger(
           Math.round(
@@ -763,6 +813,21 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
           0
         )
       : null;
+
+  if (sameEvidenceAsPrevious && previousAnalysis) {
+    profytScore = stabilizeScore(
+      profytScore,
+      previousAnalysis.profyt_score
+    );
+  }
+
+  profytScore = applyEconomicScoreCaps(
+    profytScore,
+    recommendedBid,
+    marketValueEstimate,
+    repairCostUsed,
+    riskScore
+  );
 
   const hasReportedDamage = Boolean(
     cleanText(vehicle.primary_damage) || cleanText(vehicle.secondary_damage)
@@ -792,8 +857,24 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
 
   if (sameEvidenceAsPrevious) {
     warnings.push(
-      "Repeated-analysis values were stabilized against the prior result because the vehicle evidence and assumptions did not change."
+      "Repeated-analysis values were held within stability limits because the vehicle evidence and assumptions did not change."
     );
+  }
+  if (reusedPreviousComparables) {
+    warnings.push(
+      "The prior verified comparable set was reused to prevent unnecessary valuation swings during the same 24-hour evidence window."
+    );
+  }
+
+  const valuationChangeExplanation = describeMaterialValuationChange(
+    previousAnalysis,
+    marketValueEstimate,
+    previousAnalysis?.input_snapshot,
+    inputSnapshot,
+    sameEvidenceAsPrevious
+  );
+  if (valuationChangeExplanation) {
+    warnings.push(valuationChangeExplanation);
   }
 
   if (requiresVisionButMissing) {
@@ -816,11 +897,6 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
     );
   }
 
-  const comparableVehicles = normalizeComparableVehicles(
-    aiOutput.comparable_vehicles,
-    rawSearchSources,
-    vehicle
-  );
   const searchSources = comparableVehicles
     .filter((comparable) => comparable.url)
     .map((comparable) => ({
@@ -958,14 +1034,14 @@ ${JSON.stringify(inputSnapshot, null, 2)}`,
 }
 
 
-async function getPrivateVehicleImageUrls(
+async function getPrivateVehicleImageEvidence(
   supabase: SupabaseClient,
   vehicleId: string,
   userId: string,
   limit: number
-) {
+): Promise<{ urls: string[]; storagePaths: string[] }> {
   if (limit <= 0) {
-    return [];
+    return { urls: [], storagePaths: [] };
   }
 
   const { data: imageRows, error: imageRowsError } = await supabase
@@ -978,10 +1054,11 @@ async function getPrivateVehicleImageUrls(
     .limit(limit);
 
   if (imageRowsError || !imageRows || imageRows.length === 0) {
-    return [];
+    return { urls: [], storagePaths: [] };
   }
 
   const signedUrls: string[] = [];
+  const storagePaths: string[] = [];
 
   for (const imageRow of imageRows) {
     const bucketId = cleanText(imageRow.bucket_id) || "vehicle-analysis-images";
@@ -997,10 +1074,21 @@ async function getPrivateVehicleImageUrls(
 
     if (!signedError && signedData?.signedUrl) {
       signedUrls.push(signedData.signedUrl);
+      storagePaths.push(`${bucketId}/${storagePath}`);
     }
   }
 
-  return signedUrls;
+  return { urls: signedUrls, storagePaths };
+}
+
+function buildImageEvidenceFingerprint(
+  publicUrls: string[],
+  privateStoragePaths: string[]
+) {
+  return [...publicUrls.map(canonicalUrl), ...privateStoragePaths]
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .join("|");
 }
 
 
@@ -1141,24 +1229,7 @@ function analysisInputsMatch(
     ? currentSnapshot.vehicle
     : null;
 
-  const previousFinancial = isRecord(
-    previousSnapshot.financial_assumptions
-  )
-    ? previousSnapshot.financial_assumptions
-    : null;
-
-  const currentFinancial = isRecord(
-    currentSnapshot.financial_assumptions
-  )
-    ? currentSnapshot.financial_assumptions
-    : null;
-
-  if (
-    !previousVehicle ||
-    !currentVehicle ||
-    !previousFinancial ||
-    !currentFinancial
-  ) {
+  if (!previousVehicle || !currentVehicle) {
     return false;
   }
 
@@ -1166,22 +1237,13 @@ function analysisInputsMatch(
     "year",
     "make",
     "model",
-    "mileage",
-    "mileage_unit",
-    "mileage_source",
     "title_status",
     "primary_damage",
     "secondary_damage",
     "run_condition",
     "auction_source",
     "lot_number",
-  ];
-
-  const financialKeys = [
-    "target_profit",
-    "auction_fees",
-    "transport_cost",
-    "fallback_repairs",
+    "image_evidence_fingerprint",
   ];
 
   const sameVehicle = vehicleKeys.every(
@@ -1194,21 +1256,19 @@ function analysisInputsMatch(
       )
   );
 
-  const sameFinancial = financialKeys.every(
-    (key) =>
-      normalizeComparableInput(
-        previousFinancial[key]
-      ) ===
-      normalizeComparableInput(
-        currentFinancial[key]
-      )
-  );
+  const bothRunsUsedImages =
+    (previousImageCount ?? 0) > 0 && currentImageCount > 0;
+  const sameMileage = bothRunsUsedImages
+    ? true
+    : normalizeComparableInput(previousVehicle.mileage) ===
+        normalizeComparableInput(currentVehicle.mileage) &&
+      normalizeComparableInput(previousVehicle.mileage_unit) ===
+        normalizeComparableInput(currentVehicle.mileage_unit);
 
   return (
     sameVehicle &&
-    sameFinancial &&
-    (previousImageCount ?? 0) ===
-      currentImageCount
+    sameMileage &&
+    (previousImageCount ?? 0) === currentImageCount
   );
 }
 
@@ -1233,28 +1293,104 @@ function normalizeComparableInput(
     .toLowerCase();
 }
 
+function stabilizeMarketValueRange({
+  currentLow,
+  currentHigh,
+  currentEstimate,
+  previousLow,
+  previousHigh,
+  previousEstimate,
+  comparableAnchor,
+  sameEvidenceAsPrevious,
+}: {
+  currentLow: number | null;
+  currentHigh: number | null;
+  currentEstimate: number | null;
+  previousLow: unknown;
+  previousHigh: unknown;
+  previousEstimate: unknown;
+  comparableAnchor: number | null;
+  sameEvidenceAsPrevious: boolean;
+}): [number | null, number | null, number | null] {
+  const priorLow = nonNegativeNumber(previousLow);
+  const priorHigh = nonNegativeNumber(previousHigh);
+  const priorEstimate = nonNegativeNumber(previousEstimate);
+
+  const aiEstimate =
+    currentEstimate ?? comparableAnchor ?? priorEstimate;
+
+  if (aiEstimate === null) {
+    return [currentLow, currentHigh, null];
+  }
+
+  let candidate = aiEstimate;
+
+  if (comparableAnchor !== null) {
+    candidate = sameEvidenceAsPrevious && priorEstimate !== null
+      ? comparableAnchor * 0.7 + priorEstimate * 0.2 + aiEstimate * 0.1
+      : comparableAnchor * 0.7 + aiEstimate * 0.3;
+  } else if (sameEvidenceAsPrevious && priorEstimate !== null) {
+    candidate = priorEstimate * 0.85 + aiEstimate * 0.15;
+  }
+
+  const stabilizedEstimate =
+    sameEvidenceAsPrevious && priorEstimate !== null
+      ? clampMoneyChange(
+          priorEstimate,
+          candidate,
+          Math.max(400, priorEstimate * 0.05)
+        )
+      : roundMoneyToNearest50(candidate);
+
+  const currentWidth =
+    currentLow !== null && currentHigh !== null
+      ? Math.max(500, currentHigh - currentLow)
+      : null;
+  const priorWidth =
+    priorLow !== null && priorHigh !== null
+      ? Math.max(500, priorHigh - priorLow)
+      : null;
+  const rangeWidth =
+    currentWidth ?? priorWidth ?? Math.max(800, stabilizedEstimate * 0.15);
+
+  const low = roundMoneyToNearest50(
+    Math.max(0, stabilizedEstimate - rangeWidth / 2)
+  );
+  const high = roundMoneyToNearest50(
+    stabilizedEstimate + rangeWidth / 2
+  );
+
+  return [low, high, stabilizedEstimate];
+}
+
 function stabilizeMoneyRange(
   currentLow: number | null,
   currentHigh: number | null,
   currentEstimate: number | null,
   previousLowValue: unknown,
   previousHighValue: unknown,
-  previousEstimateValue: unknown
+  previousEstimateValue: unknown,
+  changeFloor = 300,
+  changePercent = 0.15,
+  previousWeight = 0.8
 ): [number | null, number | null, number | null] {
-  const previousLow =
-    nonNegativeNumber(previousLowValue);
-  const previousHigh =
-    nonNegativeNumber(previousHighValue);
-  const previousEstimate =
-    nonNegativeNumber(previousEstimateValue);
+  const previousLow = nonNegativeNumber(previousLowValue);
+  const previousHigh = nonNegativeNumber(previousHighValue);
+  const previousEstimate = nonNegativeNumber(previousEstimateValue);
 
   const low = blendMoney(
     previousLow,
-    currentLow
+    currentLow,
+    changeFloor,
+    changePercent,
+    previousWeight
   );
   const high = blendMoney(
     previousHigh,
-    currentHigh
+    currentHigh,
+    changeFloor,
+    changePercent,
+    previousWeight
   );
 
   const ordered = orderRange(low, high);
@@ -1262,51 +1398,60 @@ function stabilizeMoneyRange(
   const estimate = normalizeEstimateWithinRange(
     blendMoney(
       previousEstimate,
-      currentEstimate
+      currentEstimate,
+      changeFloor,
+      changePercent,
+      previousWeight
     ),
     ordered[0],
     ordered[1]
   );
 
-  return [
-    ordered[0],
-    ordered[1],
-    estimate,
-  ];
+  return [ordered[0], ordered[1], estimate];
 }
 
 function blendMoney(
   previous: number | null,
-  current: number | null
+  current: number | null,
+  changeFloor: number,
+  changePercent: number,
+  previousWeight: number
 ) {
-  if (
-    previous === null &&
-    current === null
-  ) {
+  if (previous === null && current === null) {
     return null;
   }
 
   if (previous === null) {
-    return roundMoneyToNearest50(
-      current as number
-    );
+    return roundMoneyToNearest50(current as number);
   }
 
   if (current === null) {
-    return roundMoneyToNearest50(
-      previous
-    );
+    return roundMoneyToNearest50(previous);
   }
 
-  return roundMoneyToNearest50(
-    previous * 0.65 +
-      current * 0.35
+  const candidate =
+    previous * previousWeight + current * (1 - previousWeight);
+  const maximumChange = Math.max(
+    changeFloor,
+    previous * changePercent
   );
+
+  return clampMoneyChange(previous, candidate, maximumChange);
 }
 
-function roundMoneyToNearest50(
-  value: number
+function clampMoneyChange(
+  previous: number,
+  candidate: number,
+  maximumChange: number
 ) {
+  const bounded = Math.max(
+    previous - maximumChange,
+    Math.min(previous + maximumChange, candidate)
+  );
+  return roundMoneyToNearest50(Math.max(0, bounded));
+}
+
+function roundMoneyToNearest50(value: number) {
   return Math.round(value / 50) * 50;
 }
 
@@ -1616,6 +1761,120 @@ function normalizeComparableVehicles(
   return Array.from(unique.values()).slice(0, 8);
 }
 
+function normalizeStoredComparableVehicles(
+  value: unknown,
+  vehicle: VehicleRow
+): ComparableVehicle[] {
+  if (!Array.isArray(value)) return [];
+
+  const unique = new Map<string, ComparableVehicle>();
+
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+
+    const title = cleanText(item.title)?.slice(0, 200);
+    const source = cleanText(item.source)?.slice(0, 100);
+    const url = normalizeUrl(item.url);
+    const canonical = canonicalUrl(url);
+    const price = nonNegativeNumber(item.price);
+    const mileage = nonNegativeNumber(item.mileage);
+
+    if (
+      !title ||
+      !source ||
+      !url ||
+      !canonical ||
+      price === null ||
+      mileage === null ||
+      price < 1_000 ||
+      price > 250_000 ||
+      mileage > 500_000 ||
+      !isLikelySubjectVehicle(title, vehicle) ||
+      !isLikelyIndividualVehicleListing(url)
+    ) {
+      continue;
+    }
+
+    const duplicateKey = [
+      canonical,
+      Math.round(price),
+      Math.round(mileage),
+    ].join("|");
+
+    if (unique.has(duplicateKey)) continue;
+
+    unique.set(duplicateKey, {
+      title,
+      source,
+      price,
+      mileage,
+      location: cleanText(item.location)?.slice(0, 150) ?? null,
+      url,
+    });
+  }
+
+  return Array.from(unique.values()).slice(0, 8);
+}
+
+function isAnalysisFresh(createdAt: string, maximumAgeHours: number) {
+  const timestamp = Date.parse(createdAt);
+  if (!Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp <= maximumAgeHours * 60 * 60 * 1000;
+}
+
+function calculateComparableMarketAnchor(
+  comparables: ComparableVehicle[],
+  subjectMileage: number | null,
+  titleStatus: string | null
+) {
+  const weighted = comparables
+    .filter(
+      (item): item is ComparableVehicle & { price: number; mileage: number } =>
+        item.price !== null && item.mileage !== null
+    )
+    .map((item) => {
+      const mileageDifference =
+        subjectMileage !== null && subjectMileage > 0
+          ? Math.abs(item.mileage - subjectMileage) / subjectMileage
+          : 0;
+      const mileageWeight = Math.max(
+        0.25,
+        1 - Math.min(1, mileageDifference) * 0.75
+      );
+
+      return {
+        price: item.price,
+        weight: mileageWeight,
+      };
+    })
+    .sort((a, b) => a.price - b.price);
+
+  if (weighted.length < 3) return null;
+
+  const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+  let cumulativeWeight = 0;
+  let medianPrice = weighted[weighted.length - 1].price;
+
+  for (const item of weighted) {
+    cumulativeWeight += item.weight;
+    if (cumulativeWeight >= totalWeight / 2) {
+      medianPrice = item.price;
+      break;
+    }
+  }
+
+  const normalizedTitleStatus = titleStatus?.toLowerCase() ?? "";
+  const titleAdjustment =
+    normalizedTitleStatus.includes("salvage") ||
+    normalizedTitleStatus.includes("parts")
+      ? 0.78
+      : normalizedTitleStatus.includes("rebuilt")
+        ? 0.85
+        : 0.95;
+
+  return roundMoneyToNearest50(medianPrice * titleAdjustment);
+}
+
 function isLikelySubjectVehicle(title: string, vehicle: VehicleRow) {
   const normalizedTitle = title.toLowerCase();
   const make = cleanText(vehicle.vehicle_make)?.toLowerCase();
@@ -1758,15 +2017,165 @@ function calculateProfitMarginScore(
   return 30;
 }
 
+function stabilizeRecommendedBid(
+  currentBid: number | null,
+  previousBidValue: unknown
+) {
+  const previousBid = nonNegativeNumber(previousBidValue);
+  if (currentBid === null || previousBid === null) return currentBid;
+  if (currentBid <= 0) return 0;
+  if (previousBid <= 0) return Math.min(currentBid, 300);
+
+  const maximumChange = Math.min(
+    500,
+    Math.max(300, previousBid * 0.08)
+  );
+  const candidate = previousBid * 0.8 + currentBid * 0.2;
+  const bounded = Math.max(
+    previousBid - maximumChange,
+    Math.min(previousBid + maximumChange, candidate)
+  );
+
+  return Math.max(0, Math.floor(bounded / 25) * 25);
+}
+
+function stabilizeScore(
+  currentScore: number | null,
+  previousScoreValue: unknown
+) {
+  const previousScore = nullableNumber(previousScoreValue);
+  if (currentScore === null || previousScore === null) return currentScore;
+
+  const candidate = previousScore * 0.8 + currentScore * 0.2;
+  const bounded = Math.max(
+    previousScore - 5,
+    Math.min(previousScore + 5, candidate)
+  );
+
+  return clampInteger(bounded, 0, 100, 0);
+}
+
+function applyEconomicScoreCaps(
+  score: number | null,
+  recommendedBid: number | null,
+  marketValue: number | null,
+  repairCost: number,
+  riskScore: number
+) {
+  if (score === null) return null;
+
+  let cappedScore = score;
+
+  if (recommendedBid !== null && recommendedBid <= 0) {
+    cappedScore = Math.min(cappedScore, 20);
+  }
+
+  if (marketValue !== null && marketValue > 0) {
+    const repairRatio = repairCost / marketValue;
+    const bidRatio =
+      recommendedBid !== null ? recommendedBid / marketValue : null;
+
+    if (repairRatio >= 1) {
+      cappedScore = Math.min(cappedScore, 10);
+    } else if (repairRatio >= 0.75) {
+      cappedScore = Math.min(cappedScore, 25);
+    }
+
+    if (bidRatio !== null && bidRatio <= 0.05) {
+      cappedScore = Math.min(cappedScore, 30);
+    }
+  }
+
+  if (riskScore >= 80 && (recommendedBid ?? 0) <= 0) {
+    cappedScore = Math.min(cappedScore, 15);
+  }
+
+  return clampInteger(cappedScore, 0, 100, 0);
+}
+
+function describeMaterialValuationChange(
+  previousAnalysis: PreviousAnalysisRow | null,
+  currentMarketValue: number | null,
+  previousSnapshot: unknown,
+  currentSnapshot: unknown,
+  sameEvidenceAsPrevious: boolean
+) {
+  if (
+    sameEvidenceAsPrevious ||
+    !previousAnalysis ||
+    currentMarketValue === null
+  ) {
+    return null;
+  }
+
+  const previousMarketValue = nonNegativeNumber(
+    previousAnalysis.market_value_estimate
+  );
+  if (previousMarketValue === null) return null;
+
+  const difference = currentMarketValue - previousMarketValue;
+  const threshold = Math.max(500, previousMarketValue * 0.05);
+  if (Math.abs(difference) <= threshold) return null;
+
+  const reasons = describeEvidenceChanges(previousSnapshot, currentSnapshot);
+  const direction = difference > 0 ? "increased" : "decreased";
+
+  return `The repaired resale value ${direction} by $${Math.abs(
+    difference
+  ).toLocaleString()} because ${reasons}.`;
+}
+
+function describeEvidenceChanges(
+  previousSnapshot: unknown,
+  currentSnapshot: unknown
+) {
+  if (!isRecord(previousSnapshot) || !isRecord(currentSnapshot)) {
+    return "the available vehicle evidence changed";
+  }
+
+  const previousVehicle = isRecord(previousSnapshot.vehicle)
+    ? previousSnapshot.vehicle
+    : null;
+  const currentVehicle = isRecord(currentSnapshot.vehicle)
+    ? currentSnapshot.vehicle
+    : null;
+
+  if (!previousVehicle || !currentVehicle) {
+    return "the available vehicle evidence changed";
+  }
+
+  const changes: string[] = [];
+  const check = (key: string, label: string) => {
+    if (
+      normalizeComparableInput(previousVehicle[key]) !==
+      normalizeComparableInput(currentVehicle[key])
+    ) {
+      changes.push(label);
+    }
+  };
+
+  check("image_evidence_fingerprint", "the auction photo set changed");
+  check("title_status", "the title status changed");
+  check("primary_damage", "the primary damage information changed");
+  check("secondary_damage", "the secondary damage information changed");
+  check("run_condition", "the run-condition information changed");
+  check("mileage", "the mileage evidence changed");
+
+  return changes.length > 0
+    ? changes.slice(0, 3).join(", ")
+    : "the available vehicle evidence changed";
+}
+
 function getRecommendation(
   status: "completed" | "limited",
   profytScore: number | null,
   recommendedBid: number | null
 ): "strong_buy" | "buy" | "watch" | "avoid" | "insufficient_data" {
-  if (status === "limited" || profytScore === null || recommendedBid === null) {
+  if (recommendedBid !== null && recommendedBid <= 0) return "avoid";
+  if (profytScore === null || recommendedBid === null) {
     return "insufficient_data";
   }
-  if (recommendedBid <= 0) return "avoid";
+  if (status === "limited") return "insufficient_data";
   if (profytScore >= 80) return "strong_buy";
   if (profytScore >= 65) return "buy";
   if (profytScore >= 45) return "watch";
