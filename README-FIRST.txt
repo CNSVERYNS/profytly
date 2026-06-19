@@ -1,14 +1,14 @@
-PROFYTLY DECISION LABEL UPGRADE
+Profytly PDF full-photo layout fix
 
-Updated files:
-- app/api/market-analysis/route.ts
-- app/dashboard/vehicle/[id]/page.tsx
+Updated file:
+- lib/vehicle-ai-report.ts
 
-Changes:
-- Limited but usable analyses now return Buy With Caution instead of Decision Pending.
-- Positive completed analyses return Buy Below $X or Strong Buy — Max $X.
-- Zero/negative bid remains Avoid.
-- Missing analysis data displays More Data Needed.
-- Recommendation logic now considers confidence and repair risk.
+What changed:
+- Replaced CSS Grid photo layout with a print-safe HTML table.
+- Displays up to six auction photos in a true 2 x 3 layout.
+- Uses fixed table cells and proportional max dimensions.
+- Removes overflow clipping and photo captions to maximize image area.
+- Forces width/height auto and object-fit contain with !important.
+- Keeps the complete image frame visible in browser print/PDF output.
 
-No SQL migration is required.
+No SQL or npm package changes are required.

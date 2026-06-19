@@ -14,6 +14,7 @@ import {
 } from "@/lib/analyze-vehicle-client";
 
 import { runMarketAnalysis } from "@/lib/market-analysis-client";
+import { exportVehicleAiDecisionReport } from "@/lib/vehicle-ai-report";
 
 type AnalysisStatus = "success" | "limited" | "pending";
 
@@ -173,6 +174,7 @@ export default function VehicleDetailPage() {
   const [reanalyzing, setReanalyzing] = useState(false);
   const [runningMarketAnalysis, setRunningMarketAnalysis] =
     useState(false);
+  const [exportingReport, setExportingReport] = useState(false);
   const [addingNote, setAddingNote] = useState(false);
   const [deletingVehicle, setDeletingVehicle] = useState(false);
 
@@ -800,6 +802,170 @@ export default function VehicleDetailPage() {
     }
   }
 
+  async function exportAiDecisionReport() {
+    if (!vehicle || !marketAnalysis || !userId) {
+      setPageMessage(
+        "Run the full AI analysis before exporting a decision report."
+      );
+      setPageMessageIsError(true);
+      return;
+    }
+
+    const reportWindow = window.open("", "_blank");
+
+    if (!reportWindow) {
+      setPageMessage(
+        "Popup blocked. Please allow popups to export the AI report PDF."
+      );
+      setPageMessageIsError(true);
+      return;
+    }
+
+    reportWindow.opener = null;
+    reportWindow.document.open();
+    reportWindow.document.write(
+      `<!doctype html><html><head><title>Preparing Profytly Report</title></head><body style="margin:0;background:#0a0a0b;color:#fff;font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100vh"><div style="text-align:center"><div style="font-size:30px;font-weight:800">Profyt<span style="color:#00d866">ly</span></div><p style="color:#a1a1aa">Preparing your AI decision report...</p></div></body></html>`
+    );
+    reportWindow.document.close();
+
+    setExportingReport(true);
+    setPageMessage("");
+    setPageMessageIsError(false);
+
+    try {
+      const { data: imageRows, error: imageRowsError } =
+        await supabase
+          .from("vehicle_analysis_images")
+          .select("storage_path, sort_order, created_at")
+          .eq("vehicle_id", vehicle.id)
+          .eq("user_id", userId)
+          .order("sort_order", { ascending: true })
+          .order("created_at", { ascending: true })
+          .limit(6);
+
+      if (imageRowsError) {
+        throw new Error(imageRowsError.message);
+      }
+
+      const signedPhotoUrls: string[] = [];
+
+      for (const row of imageRows ?? []) {
+        if (
+          !row.storage_path ||
+          typeof row.storage_path !== "string"
+        ) {
+          continue;
+        }
+
+        const { data, error } = await supabase.storage
+          .from("vehicle-analysis-images")
+          .createSignedUrl(row.storage_path, 10 * 60);
+
+        if (!error && data?.signedUrl) {
+          signedPhotoUrls.push(data.signedUrl);
+        }
+      }
+
+      const reportPhotoUrls = Array.from(
+        new Set([
+          ...signedPhotoUrls,
+          ...galleryImages.filter((url) =>
+            /^https?:\/\//i.test(url)
+          ),
+        ])
+      ).slice(0, 6);
+
+      exportVehicleAiDecisionReport({
+        vehicle: {
+          title: vehicle.title,
+          auctionUrl: vehicle.auction_url,
+          source: vehicle.source,
+          lotNumber: vehicle.lot_number,
+          location: vehicle.location,
+          stateCode: vehicle.state_code,
+          titleStatus: vehicle.title_status,
+          mileage: vehicle.mileage,
+          mileageUnit: vehicle.mileage_unit,
+          primaryDamage: vehicle.primary_damage,
+          secondaryDamage: vehicle.secondary_damage,
+          runCondition: vehicle.run_condition,
+        },
+
+        analysis: {
+          status: marketAnalysis.status,
+          marketValueLow: marketAnalysis.market_value_low,
+          marketValueHigh: marketAnalysis.market_value_high,
+          marketValueEstimate:
+            marketAnalysis.market_value_estimate,
+          asIsValueLow: marketAnalysis.as_is_value_low,
+          asIsValueHigh: marketAnalysis.as_is_value_high,
+          asIsValueEstimate:
+            marketAnalysis.as_is_value_estimate,
+          confidenceScore: marketAnalysis.confidence_score,
+          visionUsed: marketAnalysis.vision_used,
+          imageCountAnalyzed:
+            marketAnalysis.image_count_analyzed,
+          visibleDamage: marketAnalysis.visible_damage ?? [],
+          hiddenDamageRisks:
+            marketAnalysis.hidden_damage_risks ?? [],
+          repairRisk: marketAnalysis.repair_risk,
+          riskScore: marketAnalysis.risk_score,
+          visibleRepairCostLow:
+            marketAnalysis.visible_repair_cost_low,
+          visibleRepairCostHigh:
+            marketAnalysis.visible_repair_cost_high,
+          visibleRepairCostEstimate:
+            marketAnalysis.visible_repair_cost_estimate,
+          hiddenDamageContingencyLow:
+            marketAnalysis.hidden_damage_contingency_low,
+          hiddenDamageContingencyHigh:
+            marketAnalysis.hidden_damage_contingency_high,
+          hiddenDamageContingencyEstimate:
+            marketAnalysis.hidden_damage_contingency_estimate,
+          repairCostLow: marketAnalysis.repair_cost_low,
+          repairCostHigh: marketAnalysis.repair_cost_high,
+          repairCostEstimate:
+            marketAnalysis.repair_cost_estimate,
+          profytScore: marketAnalysis.profyt_score,
+          recommendedBid: marketAnalysis.recommended_bid,
+          recommendation: marketAnalysis.recommendation,
+          summary: marketAnalysis.summary,
+          keyFactors: marketAnalysis.key_factors ?? [],
+          warnings: marketAnalysis.warnings ?? [],
+          comparableVehicles:
+            marketAnalysis.comparable_vehicles ?? [],
+          modelName: marketAnalysis.model_name,
+          createdAt: marketAnalysis.created_at,
+        },
+
+        assumptions: {
+          desiredProfit: toNumber(desiredProfitInput),
+          repairs:
+            marketAnalysis.repair_cost_estimate ??
+            toNumber(repairsInput),
+          transport: toNumber(transportInput),
+          fees: toNumber(feesInput),
+        },
+
+        photoUrls: reportPhotoUrls,
+        notes: notes.map((note) => ({
+          content: note.content,
+          createdAt: note.created_at,
+        })),
+      }, reportWindow);
+    } catch (error) {
+      reportWindow.close();
+      setPageMessage(
+        error instanceof Error
+          ? error.message
+          : "AI decision report could not be exported."
+      );
+      setPageMessageIsError(true);
+    } finally {
+      setExportingReport(false);
+    }
+  }
+
   async function addNote() {
     setNoteMessage("");
     setNoteMessageIsError(false);
@@ -1223,17 +1389,31 @@ export default function VehicleDetailPage() {
               )}
             </div>
 
-            <button
-              onClick={runAiMarketAnalysis}
-              disabled={runningMarketAnalysis}
-              className="w-fit rounded-lg bg-green-500 px-5 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {runningMarketAnalysis
-                ? "Analyzing Vehicle..."
-                : marketAnalysis
-                  ? "Re-run Full AI Analysis"
-                  : "Run Full AI Analysis"}
-            </button>
+            <div className="flex flex-wrap gap-3">
+              {marketAnalysis && (
+                <button
+                  onClick={exportAiDecisionReport}
+                  disabled={exportingReport}
+                  className="w-fit rounded-lg border border-green-500/40 bg-green-500/10 px-5 py-3 font-semibold text-green-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {exportingReport
+                    ? "Preparing Report..."
+                    : "Export AI Report PDF"}
+                </button>
+              )}
+
+              <button
+                onClick={runAiMarketAnalysis}
+                disabled={runningMarketAnalysis}
+                className="w-fit rounded-lg bg-green-500 px-5 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningMarketAnalysis
+                  ? "Analyzing Vehicle..."
+                  : marketAnalysis
+                    ? "Re-run Full AI Analysis"
+                    : "Run Full AI Analysis"}
+              </button>
+            </div>
           </div>
 
           {!marketAnalysis ? (
